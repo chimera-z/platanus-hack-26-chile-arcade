@@ -66,6 +66,17 @@
     { left: 'P1_L', right: 'P1_R', jump: 'P1_U', strike: 'P1_1', start: 'START1' },
     { left: 'P2_L', right: 'P2_R', jump: 'P2_U', strike: 'P2_1', start: 'START2' }
   ];
+  const KEYBOARD_START = ['2', 'Enter'];
+  const KEYBOARD_CONTROLS = [
+    { move: 'A / D', jump: 'W', strike: 'E' },
+    { move: '← / →', jump: '↑', strike: 'Shift derecho' }
+  ];
+  const ARCADE_CONTROLS = { move: '← / →', jump: '↑', strike: '1 de tu lado' };
+
+  /** @param {number} side @param {boolean} useArcadeLabels */
+  function startLabel(side, useArcadeLabels) {
+    return 'START J' + (side + 1) + (useArcadeLabels ? '' : ' (' + KEYBOARD_START[side] + ')');
+  }
 
   /** @typedef {'title' | 'faceoff' | 'live' | 'goal' | 'repair' | 'result'} Phase */
   /** @typedef {{minX: number, maxX: number, minY: number, maxY: number}} Box */
@@ -101,6 +112,11 @@
     return normalizeIncomingKey(event.key);
   }
 
+  /** @param {KeyboardEvent} event @param {string} key */
+  function inputId(event, key) {
+    return (event.isTrusted === false ? 'virtual:' : 'physical:') + (event.code || key);
+  }
+
   class CabinetInput {
     constructor() {
       this.lookup = new Map();
@@ -116,32 +132,47 @@
       /** @param {KeyboardEvent} event */
       this.keydown = (event) => {
         const key = cabinetKey(event);
-        const code = this.lookup.get(key);
+        // The host sends canonical cabinet keys. Native desktop keys follow seat position.
+        const startSide = event.isTrusted ? KEYBOARD_START.indexOf(key) : -1;
+        const code = startSide >= 0 ? PLAYER_INPUT[startSide].start : this.lookup.get(key);
         if (!code) return;
         event.preventDefault();
-        const physicalKey = event.code || key;
-        if (event.repeat || this.pressedKeys.has(physicalKey)) return;
-        this.pressedKeys.set(physicalKey, code);
+        const id = inputId(event, key);
+        if (event.repeat || this.pressedKeys.has(id)) return;
+        this.pressedKeys.set(id, code);
         let aliases = this.held.get(code);
         if (!aliases) {
           aliases = new Set();
           this.held.set(code, aliases);
         }
         if (!aliases.size) this.edges.add(code);
-        aliases.add(physicalKey);
+        aliases.add(id);
       };
       /** @param {KeyboardEvent} event */
       this.keyup = (event) => {
+        if (event.isTrusted && event.defaultPrevented) return;
         const key = cabinetKey(event);
-        const physicalKey = event.code || key;
-        const code = this.pressedKeys.get(physicalKey);
+        const id = inputId(event, key);
+        const code = this.pressedKeys.get(id);
         if (code || this.lookup.has(key)) event.preventDefault();
-        if (!code) return;
-        this.pressedKeys.delete(physicalKey);
-        const aliases = this.held.get(code);
-        aliases?.delete(physicalKey);
-        if (!aliases?.size) this.held.delete(code);
+        if (code) this.release(id, code);
       };
+    }
+
+    /** @param {string} id @param {string} code */
+    release(id, code) {
+      this.pressedKeys.delete(id);
+      const aliases = this.held.get(code);
+      aliases?.delete(id);
+      if (!aliases?.size) this.held.delete(code);
+    }
+
+    clearPhysical() {
+      for (const [id, code] of this.pressedKeys) {
+        if (!id.startsWith('physical:')) continue;
+        this.release(id, code);
+        if (!this.held.has(code)) this.edges.delete(code);
+      }
     }
 
     clear() {
@@ -1239,72 +1270,77 @@
         label(this, 0, 0, 13, '#ff9658').setText('J2').setStroke('#101725', 4)
       ];
       const guide = label(this, 400, 144, 19);
+      const touch = window.matchMedia('(any-pointer: coarse)').matches;
       const controls = [
-        label(this, 207, 550, 16, '#56dfff').setText('J1   A/D mover  ·  W saltar  ·  E pegar'),
-        label(this, 593, 550, 16, '#ff9658').setText('J2   ←/→ mover  ·  ↑ saltar  ·  Shift der. pegar')
+        label(this, 207, 550, 16, '#56dfff'),
+        label(this, 593, 550, 16, '#ff9658')
       ];
       const cabinetHint = label(this, 400, 575, 16, '#b5c9e0')
-        .setText('Arcade: palanca para mover y saltar · botón 1 para pegar');
+        .setText(touch ? 'Usa los controles debajo de la cancha' : 'Arcade: palanca para moverte y saltar · 1 para pegar');
       const panel = this.add.graphics();
       const headline = label(this, 400, 0, 40);
       headline.setFontFamily('Arial Black, Arial, sans-serif').setFontStyle('bold italic');
       const detail = label(this, 400, 0, 18, '#d2e2f5');
       const titleStations = [
-        label(this, 224, 249, 22, '#56dfff').setText('J1 · CELESTE'),
-        label(this, 576, 249, 22, '#ff9658').setText('J2 · NARANJA')
+        label(this, 224, 249, 22, '#56dfff').setText('J1 · CELESTE · IZQ.'),
+        label(this, 576, 249, 22, '#ff9658').setText('J2 · NARANJA · DER.')
       ];
       const titleControls = [
-        label(this, 224, 320, 19).setText('Palanca ← →   Mover (A/D)\nPalanca ↑   Saltar (W)\nBotón 1   Pegar (E)').setLineSpacing(8),
-        label(this, 576, 320, 19).setText('Palanca ← →   Mover (←/→)\nPalanca ↑   Saltar (↑)\nBotón 1   Pegar (Shift der.)').setLineSpacing(8)
+        label(this, 224, 320, 19).setLineSpacing(8),
+        label(this, 576, 320, 19).setLineSpacing(8)
       ];
       const joinLabels = [label(this, 224, 405, 20, '#56dfff'), label(this, 576, 405, 20, '#ff9658')];
       const joinHint = label(this, 400, 549, 18, '#d2e2f5');
-      return { rink, actors, meters, scores, clock, mode, stations, status, gateText, markers, guide, controls, cabinetHint,
+      return { rink, actors, meters, scores, clock, mode, stations, status, gateText, markers, guide, controls, cabinetHint, touch, arcadeStart: false,
         panel, headline, detail, titleStations, titleControls, joinLabels, joinHint };
     }
 
     create() {
       this.match = new Match();
-      this.view = this.createView();
+      const view = this.createView();
+      this.view = view;
 
       /** @param {KeyboardEvent} event */
       const press = (event) => {
-        if (document.hidden || !this.cabinet.lookup.has(cabinetKey(event))) return;
-        if (this.suspended) {
-          if (event.repeat) return;
-          focus();
+        if (document.hidden || (event.isTrusted && event.defaultPrevented)) return;
+        const key = cabinetKey(event);
+        const code = this.cabinet.lookup.get(key);
+        if (!code) return;
+        if (code === PLAYER_INPUT[0].start || code === PLAYER_INPUT[1].start) {
+          view.arcadeStart = event.isTrusted === false;
         }
         this.cabinet.keydown(event);
         if (!event.repeat) this.audioCues.unlock();
       };
-      const blur = () => {
+      const pause = () => {
         this.suspended = true;
         this.accumulator = 0;
         this.cabinet.clear();
         this.audioCues.update(this.match.phase, true);
       };
-      const focus = () => {
-        if (!this.suspended || document.hidden) return;
+      const resume = () => {
+        if (!this.suspended) return;
         this.suspended = false;
         this.accumulator = 0;
         this.cabinet.clear();
         if (this.match.phase === 'live' || this.match.phase === 'repair') this.resumeFor = RULES.resume * 1000;
       };
-      const visibility = () => { if (document.hidden) blur(); else if (document.hasFocus()) focus(); };
+      const visibility = () => { if (document.hidden) pause(); else resume(); };
+      // The host's touch buttons live outside the iframe and can take focus mid-match.
+      const blur = () => { if (document.hidden) pause(); else this.cabinet.clearPhysical(); };
       const canvas = this.game.canvas;
       canvas.tabIndex = 0;
-      const focusCanvas = () => { canvas.focus({ preventScroll: true }); focus(); };
+      const focusCanvas = () => canvas.focus({ preventScroll: true });
       canvas.addEventListener('pointerdown', focusCanvas);
       window.addEventListener('keydown', press);
       window.addEventListener('keyup', this.cabinet.keyup);
       window.addEventListener('blur', blur);
-      window.addEventListener('focus', focus);
       document.addEventListener('visibilitychange', visibility);
+      visibility();
       this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
         window.removeEventListener('keydown', press);
         window.removeEventListener('keyup', this.cabinet.keyup);
         window.removeEventListener('blur', blur);
-        window.removeEventListener('focus', focus);
         document.removeEventListener('visibilitychange', visibility);
         canvas.removeEventListener('pointerdown', focusCanvas);
         this.cabinet.clear();
@@ -1381,7 +1417,7 @@
       view.actors.setPosition(shakeX, shakeY);
       const seconds = Math.ceil(match.clock / RULES.hz);
       showText(view.clock.setVisible(!isTitle), Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0'));
-      showText(view.mode.setVisible(!isTitle), match.overtime ? 'GOL DE ORO' : 'PRIMERO A 3');
+      showText(view.mode.setVisible(!isTitle), match.overtime ? 'GOL DE ORO' : 'PRIMERO A ' + RULES.goalsToWin);
       this.renderGuide(view);
       if (!isTitle && view.guide.text) {
         const width = Math.max(220, view.guide.width + 32);
@@ -1493,12 +1529,13 @@
       const match = this.match;
       const title = match.phase === 'title';
       const joining = title && !this.suspended;
+      const useArcadeLabels = view.touch || view.arcadeStart;
       const leftOpen = match.gateOpen(0);
       const rightOpen = match.gateOpen(1);
       let message = '';
       let color = '#f7faff';
       if (joining) {
-        message = 'Primero a 3 goles · 90 segundos';
+        message = 'Primero a ' + RULES.goalsToWin + ' goles · ' + RULES.regulation + ' segundos';
       } else if (match.phase === 'live' && !this.suspended && !this.resumeFor) {
         if (leftOpen && rightOpen) {
           message = 'AMBOS ARCOS ABIERTOS · Remata el disco al arco rival';
@@ -1511,14 +1548,17 @@
       }
       showText(view.guide.setY(joining ? 163 : 146).setColor(color), message);
       for (let side = 0; side < 2; side++) {
-        view.controls[side].setVisible(!title);
+        const { move, jump, strike } = useArcadeLabels ? ARCADE_CONTROLS : KEYBOARD_CONTROLS[side];
+        showText(view.controls[side].setVisible(!title),
+          'J' + (side + 1) + '   ' + move + ' mover  ·  ' + jump + ' saltar  ·  ' + strike + ' pega');
         view.titleStations[side].setVisible(joining);
-        view.titleControls[side].setVisible(joining);
+        showText(view.titleControls[side].setVisible(joining),
+          'Mover: ' + move + '\nSaltar: ' + jump + '\nPegar: ' + (view.touch ? 'toca ' : '') + strike);
         view.joinLabels[side].setVisible(joining);
-        showText(view.joinLabels[side], match.ready[side] ? 'LISTO' : side === 0 ? 'START J1 (ENTER)' : 'START J2 (2)');
+        showText(view.joinLabels[side], match.ready[side] ? 'LISTO' : startLabel(side, useArcadeLabels));
       }
-      showText(view.joinHint.setVisible(joining), match.ready[0] ? 'Falta J2 · START J2 (2)'
-        : match.ready[1] ? 'Falta J1 · START J1 (Enter)'
+      showText(view.joinHint.setVisible(joining), match.ready[0] ? 'Falta J2 · ' + startLabel(1, useArcadeLabels)
+        : match.ready[1] ? 'Falta J1 · ' + startLabel(0, useArcadeLabels)
         : 'Dos jugadores · Pulsen ambos START');
     }
 
@@ -1535,7 +1575,7 @@
 
       if (match.phase === 'title') {
         headline = 'LORCA HOCKEY';
-        detail = 'Pega al rival, abre su arco por 6 s y remata el disco.';
+        detail = 'Golpea al rival para abrir su arco por ' + RULES.open + ' s y remata.';
         titleSize = 58;
         y = 60;
       } else if (match.phase === 'faceoff') {
@@ -1553,12 +1593,13 @@
         accent = match.winner === -1 ? 0xb0c4dd : TEAM[match.winner];
         detail = match.phaseAge < ticks(RULES.resultLock)
           ? match.score.join('  –  ')
-          : 'Revancha: ambos START (Enter y 2)';
+          : view.touch || view.arcadeStart ? 'Revancha: START J1 y START J2'
+            : 'Revancha: J1 (' + KEYBOARD_START[0] + ') · J2 (' + KEYBOARD_START[1] + ')';
         y = 326;
       }
       if (this.suspended || this.resumeFor > 0) {
         headline = this.suspended ? 'PARTIDA EN ESPERA' : 'REANUDANDO';
-        detail = this.suspended ? 'Vuelve al juego y pulsa un control' : '';
+        detail = this.suspended ? 'Vuelve a la pestaña para continuar' : '';
         titleSize = 34;
         y = 294;
         color = '#f7faff';
