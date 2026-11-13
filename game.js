@@ -1,1725 +1,1604 @@
-// Platanus Hack 26 — Santiago Edition
-// Two-player brick duel. Dash with Button 1, break the word, keep your paddle alive.
+(() => {
+  "use strict";
 
-const GAME_WIDTH = 800;
-const GAME_HEIGHT = 600;
-const STORAGE_KEY = 'platanus-hack-26-standard-highscores';
-const MAX_HIGH_SCORES = 5;
-const WINNING_NAME_LENGTH = 3;
-
-const COLORS = {
-  background: 0x0b0f03,
-  frame: 0x3a3a0a,
-  accent: 0xe1ff00,
-  accentSoft: 0xa8c700,
-  p1: 0xe1ff00,
-  p2: 0xff6ec7,
-  red: 0xff7a7a,
-  white: 0xf7ffd8,
-  slate: 0xb8c48d,
-  cell: 0x1a1e05,
-  overlay: 0x0c0e02,
-  backdrop: 0x030504,
-  fieldBg: 0x0a0d0b,
-  brickA: 0x3f4a0e,
-  brickB: 0x6b7f14,
-  brickC: 0xa8c700,
-  brickD: 0xe1ff00,
-};
-
-const LETTER_GRID = [
-  ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
-  ['H', 'I', 'J', 'K', 'L', 'M', 'N'],
-  ['O', 'P', 'Q', 'R', 'S', 'T', 'U'],
-  ['V', 'W', 'X', 'Y', 'Z', '.', '-'],
-  ['DEL', 'END'],
-];
-
-// DO NOT replace existing keys — they match the physical arcade cabinet wiring.
-// To add local testing shortcuts, append extra keys to any array.
-const CABINET_KEYS = {
-  P1_U: ['w'],
-  P1_D: ['s'],
-  P1_L: ['a'],
-  P1_R: ['d'],
-  P1_1: ['u'],
-  P1_2: ['i'],
-  P1_3: ['o'],
-  P1_4: ['j'],
-  P1_5: ['k'],
-  P1_6: ['l'],
-  P2_U: ['ArrowUp'],
-  P2_D: ['ArrowDown'],
-  P2_L: ['ArrowLeft'],
-  P2_R: ['ArrowRight'],
-  P2_1: ['r'],
-  P2_2: ['t'],
-  P2_3: ['y'],
-  P2_4: ['f'],
-  P2_5: ['g'],
-  P2_6: ['h'],
-  START1: ['Enter'],
-  START2: ['2'],
-};
-
-const KEYBOARD_TO_ARCADE = {};
-for (const [arcadeCode, keys] of Object.entries(CABINET_KEYS)) {
-  for (const key of keys) {
-    KEYBOARD_TO_ARCADE[normalizeIncomingKey(key)] = arcadeCode;
-  }
-}
-
-const config = {
-  type: Phaser.AUTO,
-  width: GAME_WIDTH,
-  height: GAME_HEIGHT,
-  parent: 'game-root',
-  backgroundColor: '#0b0f03',
-  physics: {
-    default: 'arcade',
-    arcade: {
-      gravity: { y: 0 },
-      debug: false,
-    },
-  },
-  scale: {
-    mode: Phaser.Scale.FIT,
-    autoCenter: Phaser.Scale.CENTER_BOTH,
-    width: GAME_WIDTH,
-    height: GAME_HEIGHT,
-  },
-  scene: {
-    preload,
-    create,
-    update,
-  },
-};
-
-new Phaser.Game(config);
-
-function preload() {}
-
-function create() {
-  const scene = this;
-
-  scene.state = {
-    phase: 'loading',
-    scores: { p1: 0, p2: 0 },
-    remainingBricks: 0,
-    highScores: [],
-    winner: null,
-    winnerLabel: '',
-    saveStatus: 'Loading scores...',
-    menu: { cursor: 0, cooldown: 0, lastAxis: 0 },
-    dash: {
-      p1: { activeUntil: 0, cooldownUntil: 0, dir: 0 },
-      p2: { activeUntil: 0, cooldownUntil: 0, dir: 0 },
-    },
-    nameEntry: {
-      letters: [],
-      row: 0,
-      col: 0,
-      moveCooldownUntil: 0,
-      confirmCooldownUntil: 0,
-      lastMoveVector: { x: 0, y: 0 },
-    },
+  const CABINET_KEYS = {
+    P1_U: ['w'],
+    P1_D: ['s'],
+    P1_L: ['a'],
+    P1_R: ['d'],
+    P1_1: ['u', '1', 'e'],
+    P1_2: ['i'],
+    P1_3: ['o'],
+    P1_4: ['j'],
+    P1_5: ['k'],
+    P1_6: ['l'],
+    P2_U: ['ArrowUp'],
+    P2_D: ['ArrowDown'],
+    P2_L: ['ArrowLeft'],
+    P2_R: ['ArrowRight'],
+    P2_1: ['r', 'ShiftRight'],
+    P2_2: ['t'],
+    P2_3: ['y'],
+    P2_4: ['f'],
+    P2_5: ['g'],
+    P2_6: ['h'],
+    START1: ['Enter'],
+    START2: ['2'],
   };
 
-  scene.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, COLORS.background);
-  scene.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, 760, 560, 0x141a04, 0.94).setStrokeStyle(4, COLORS.frame, 0.8);
+  const RULES = {
+    width: 800, height: 600, hz: 120, puckSubsteps: 2,
+    left: 52, right: 748, ceiling: 224, floor: 500, mouthTop: 306, mouthBottom: 418, goalDepth: 24,
+    spawnX: [240, 560],
+    fighterWidth: 30, fighterHeight: 52, groundSpeed: 280, airSpeed: 245,
+    groundRamp: 0.05, groundStop: 0.045, groundTurn: 0.038, airAcceleration: 4000, airBrake: 3500,
+    riseGravity: 1650, fallGravity: 2200, jumpSpeed: 770, jumpBuffer: 0.1,
+    reach: 42, strikeHeight: 30, strikeOffset: 19, strikeMove: 0.7,
+    windup: 0.075, active: 0.083, recovery: 0.225, strikeBuffer: 0.12,
+    recoil: 0.15, stun: 0.65, protection: 0.4, pipDecay: 5, shove: 220, shoveBrake: 1200,
+    puckRadius: 11, serveSpeed: 320, serveAngle: -17, shotSpeed: 520, maxPuckSpeed: 560,
+    groundShot: -16, airShot: 25, minHorizontal: 0.20, minVertical: 0.16,
+    open: 6, goalsToWin: 3, regulation: 90, overtime: 15,
+    opening: 2, faceoff: 1, goalCue: 0.8, readyTimeout: 15, resultLock: 1, resultTimeout: 15,
+    resume: 1, stuckTime: 1.5, stuckSpan: 16, repair: 0.75
+  };
+  const FEEL = {
+    hitFlash: 0.085, trail: 0.24, shutter: 0.12, maxFlashes: 12,
+    impactMs: 170, goalMs: 540, shakeMs: 110, hitShake: 2, goalShake: 4
+  };
+  const STEP = 1 / RULES.hz;
+  const STEP_MS = 1000 * STEP;
+  const TICK_CAP = 12;
+  const HALF_BODY = RULES.fighterWidth / 2;
+  const RADIUS = RULES.puckRadius;
+  const CENTER_X = (RULES.left + RULES.right) / 2;
+  const CENTER_Y = (RULES.ceiling + RULES.floor) / 2;
+  const GOAL_Y = (RULES.mouthTop + RULES.mouthBottom) / 2;
+  const HIT_START = ticks(RULES.windup);
+  const HIT_END = HIT_START + ticks(RULES.active);
+  const SWING_END = HIT_END + ticks(RULES.recovery);
+  const TEAM = [0x56dfff, 0xff9658];
+  const INK = 0x101725;
+  const WHITE = 0xf7faff;
+  const GOLD = 0xffe26a;
+  const EPSILON = 1e-7;
+  const PLAYER_INPUT = [
+    { left: 'P1_L', right: 'P1_R', jump: 'P1_U', strike: 'P1_1', start: 'START1' },
+    { left: 'P2_L', right: 'P2_R', jump: 'P2_U', strike: 'P2_1', start: 'START2' }
+  ];
 
-  createBackground(scene);
-  createHud(scene);
-  createPlayfield(scene);
-  createEndGameUi(scene);
-  createStartScreen(scene);
-  createLeaderboardScreen(scene);
-  createControlsScreen(scene);
-  createPauseScreen(scene);
-  createControls(scene);
-  showStartScreen(scene);
+  /** @typedef {'title' | 'faceoff' | 'live' | 'goal' | 'repair' | 'result'} Phase */
+  /** @typedef {{minX: number, maxX: number, minY: number, maxY: number}} Box */
+  /** @typedef {{x: number, y: number, depth: number}} Contact */
+  /** @typedef {{start: boolean, move: number, jump: boolean, strike: boolean}} PlayerInput */
+  /** @typedef {{at: number, fighter: boolean, puck: boolean}} Swing */
+  /** @typedef {{side: number, x: number, y: number, oldX: number, oldY: number,
+    vx: number, vy: number, face: number, grounded: boolean, swing: Swing | null, jumpUntil: number, strikeUntil: number,
+    pips: number, decayAt: number, blockedUntil: number, protectedUntil: number, stunned: boolean, shove: number}} Fighter */
+  /** @typedef {{x: number, y: number, oldX: number, oldY: number, vx: number, vy: number,
+    shooter: number, powerUntil: number, watched: Box, stillSince: number}} Puck */
+  /** @typedef {{owner: number, until: number}} Gate */
+  /** @typedef {'hit' | 'unlock' | 'shot' | 'clang' | 'serve' | 'goal' | 'clash' | 'warning' | 'rail' | 'ready' | 'count' | 'result' | 'swing'} Cue */
+  /** @typedef {{cue: Cue, x: number, y: number, side: number}} MatchEvent */
 
-  loadHighScores()
-    .then((highScores) => {
-      scene.state.highScores = highScores;
-      scene.state.saveStatus = 'Finish a duel to save a score.';
-      refreshLeaderboard(scene);
-      refreshStartScreenLeaderboard(scene);
-    })
-    .catch(() => {
-      scene.state.highScores = [];
-      scene.state.saveStatus = 'Storage unavailable. Match runs without saves.';
-      refreshLeaderboard(scene);
-      refreshStartScreenLeaderboard(scene);
+  /** @param {number} seconds */
+  function ticks(seconds) { return Math.round(seconds * RULES.hz); }
+  /** @param {number} value @param {number} min @param {number} max */
+  function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+  /** @param {number} value @param {number} target @param {number} step */
+  function approach(value, target, step) {
+    return value + clamp(target - value, -step, step);
+  }
+  /** @param {number} degrees */
+  function radians(degrees) { return degrees * Math.PI / 180; }
+  /** @param {string} key */
+  function normalizeIncomingKey(key) { return key.length === 1 ? key.toLowerCase() : key; }
+
+  /** @param {KeyboardEvent} event */
+  function cabinetKey(event) {
+    if (event.code === 'ShiftRight') return event.code;
+    if (event.code === 'Digit1' || event.code === 'Digit2') return event.code.slice(-1);
+    return normalizeIncomingKey(event.key);
+  }
+
+  class CabinetInput {
+    constructor() {
+      this.lookup = new Map();
+      for (const [code, keys] of Object.entries(CABINET_KEYS)) {
+        for (const key of keys) this.lookup.set(normalizeIncomingKey(key), code);
+      }
+      /** @type {Map<string, Set<string>>} */
+      this.held = new Map();
+      /** @type {Map<string, string>} */
+      this.pressedKeys = new Map();
+      /** @type {Set<string>} */
+      this.edges = new Set();
+      /** @param {KeyboardEvent} event */
+      this.keydown = (event) => {
+        const key = cabinetKey(event);
+        const code = this.lookup.get(key);
+        if (!code) return;
+        event.preventDefault();
+        const physicalKey = event.code || key;
+        if (event.repeat || this.pressedKeys.has(physicalKey)) return;
+        this.pressedKeys.set(physicalKey, code);
+        let aliases = this.held.get(code);
+        if (!aliases) {
+          aliases = new Set();
+          this.held.set(code, aliases);
+        }
+        if (!aliases.size) this.edges.add(code);
+        aliases.add(physicalKey);
+      };
+      /** @param {KeyboardEvent} event */
+      this.keyup = (event) => {
+        const key = cabinetKey(event);
+        const physicalKey = event.code || key;
+        const code = this.pressedKeys.get(physicalKey);
+        if (code || this.lookup.has(key)) event.preventDefault();
+        if (!code) return;
+        this.pressedKeys.delete(physicalKey);
+        const aliases = this.held.get(code);
+        aliases?.delete(physicalKey);
+        if (!aliases?.size) this.held.delete(code);
+      };
+    }
+
+    clear() {
+      this.held.clear();
+      this.pressedKeys.clear();
+      this.edges.clear();
+    }
+
+    /** @returns {PlayerInput[]} */
+    take() {
+      const frame = PLAYER_INPUT.map(({ left, right, jump, strike, start }) => {
+        const leftHeld = Boolean(this.held.get(left)?.size);
+        const rightHeld = Boolean(this.held.get(right)?.size);
+        // A direction pressed and released between ticks still gets one tick.
+        const move = leftHeld || rightHeld
+          ? Number(rightHeld) - Number(leftHeld)
+          : Number(this.edges.has(right)) - Number(this.edges.has(left));
+        return { move, jump: this.edges.has(jump), strike: this.edges.has(strike), start: this.edges.has(start) };
+      });
+      this.edges.clear();
+      return frame;
+    }
+  }
+
+  /** @param {number} side @returns {Fighter} */
+  function spawnFighter(side) {
+    const x = RULES.spawnX[side];
+    const y = RULES.floor;
+    return {
+      side, x, y, oldX: x, oldY: y, vx: 0, vy: 0, face: side === 0 ? 1 : -1,
+      grounded: true, swing: null, jumpUntil: -1, strikeUntil: -1, pips: 0, decayAt: 0, blockedUntil: 0,
+      protectedUntil: 0, stunned: false, shove: 0
+    };
+  }
+
+  /** @param {number} now @returns {Puck} */
+  function spawnPuck(now) {
+    const x = CENTER_X;
+    const y = CENTER_Y;
+    return {
+      x, y, oldX: x, oldY: y, vx: 0, vy: 0, shooter: -1, powerUntil: 0,
+      watched: { minX: x, maxX: x, minY: y, maxY: y }, stillSince: now
+    };
+  }
+
+  /** @param {Fighter} fighter @returns {Box} */
+  function bodyBox(fighter) {
+    return {
+      minX: fighter.x - HALF_BODY, maxX: fighter.x + HALF_BODY,
+      minY: fighter.y - RULES.fighterHeight, maxY: fighter.y
+    };
+  }
+
+  /** @param {Fighter} fighter @returns {Box} */
+  function strikeBox(fighter) {
+    const edge = fighter.x + fighter.face * HALF_BODY;
+    const tip = edge + fighter.face * RULES.reach;
+    const centerY = fighter.y - RULES.fighterHeight + RULES.strikeOffset;
+    return {
+      minX: Math.min(edge, tip), maxX: Math.max(edge, tip),
+      minY: centerY - RULES.strikeHeight / 2, maxY: centerY + RULES.strikeHeight / 2
+    };
+  }
+
+  /** @param {Box} a @param {Box} b */
+  function overlaps(a, b) {
+    return a.minX < b.maxX && a.maxX > b.minX && a.minY < b.maxY && a.maxY > b.minY;
+  }
+
+  /** @param {Pick<Puck, 'x' | 'y' | 'vx' | 'vy'>} puck @param {Box} box @returns {Contact | null} */
+  function circleContact(puck, box) {
+    const dx = puck.x - clamp(puck.x, box.minX, box.maxX);
+    const dy = puck.y - clamp(puck.y, box.minY, box.maxY);
+    const distanceSquared = dx * dx + dy * dy;
+    if (distanceSquared >= RADIUS * RADIUS) return null;
+    if (distanceSquared > EPSILON) {
+      const distance = Math.sqrt(distanceSquared);
+      return { x: dx / distance, y: dy / distance, depth: RADIUS - distance };
+    }
+
+    const faces = [
+      { x: 0, y: -1, depth: puck.y - box.minY + RADIUS },
+      { x: 0, y: 1, depth: box.maxY - puck.y + RADIUS },
+      { x: -1, y: 0, depth: puck.x - box.minX + RADIUS },
+      { x: 1, y: 0, depth: box.maxX - puck.x + RADIUS }
+    ];
+    const nearest = faces.reduce((nearest, face) => {
+      if (Math.abs(face.depth - nearest.depth) > EPSILON) {
+        return face.depth < nearest.depth ? face : nearest;
+      }
+      const along = face.x * puck.vx + face.y * puck.vy;
+      const nearestAlong = nearest.x * puck.vx + nearest.y * puck.vy;
+      return along < nearestAlong ? face : nearest;
     });
-}
-
-function update(time, delta) {
-  const scene = this;
-  if (!scene.state) {
-    return;
-  }
-
-  const phase = scene.state.phase;
-
-  if (phase === 'start') {
-    handleStartMenu(scene, time);
-    return;
-  }
-
-  if (phase === 'leaderboard') {
-    if (consumeAnyPressedControl(scene, ['START1', 'START2', 'P1_1', 'P2_1', 'P1_2', 'P2_2'])) {
-      scene.leaderScreen.container.setVisible(false);
-      showStartScreen(scene);
+    // A centered vertical contact has no basis for choosing left over right.
+    if (nearest.x && Math.abs(puck.x - (box.minX + box.maxX) / 2) < EPSILON && Math.abs(puck.vx) < EPSILON) {
+      return faces[0].depth <= faces[1].depth ? faces[0] : faces[1];
     }
-    return;
+    return nearest;
   }
 
-  if (phase === 'controls') {
-    if (consumeAnyPressedControl(scene, ['START1', 'START2', 'P1_1', 'P2_1', 'P1_2', 'P2_2'])) {
-      scene.controlsScreen.container.setVisible(false);
-      showStartScreen(scene);
-    }
-    return;
+  /** @param {Puck} puck @param {Contact} contact */
+  function separate(puck, contact) {
+    puck.x += contact.x * (contact.depth + EPSILON);
+    puck.y += contact.y * (contact.depth + EPSILON);
   }
 
-  if (phase === 'playing') {
-    updatePaddles(scene, delta, time);
-    updateBallGhostStates(scene);
-    updateBallTrails(scene, time);
-    checkBallEscape(scene);
-    if (consumeAnyPressedControl(scene, ['START1', 'START2'])) {
-      pauseMatch(scene);
-    }
-    return;
+  /** @param {Puck} puck @param {number} nx @param {number} ny */
+  function reflect(puck, nx, ny) {
+    const into = puck.vx * nx + puck.vy * ny;
+    if (into >= -EPSILON) return false;
+    puck.vx -= 2 * into * nx;
+    puck.vy -= 2 * into * ny;
+    return true;
   }
 
-  if (phase === 'paused') {
-    if (consumeAnyPressedControl(scene, ['START1', 'START2'])) {
-      resumeMatch(scene);
-    }
-    return;
+  /** @param {Puck} puck */
+  function capPuckSpeed(puck) {
+    const speed = Math.hypot(puck.vx, puck.vy);
+    if (speed <= RULES.maxPuckSpeed) return speed;
+    puck.vx *= RULES.maxPuckSpeed / speed;
+    puck.vy *= RULES.maxPuckSpeed / speed;
+    return RULES.maxPuckSpeed;
   }
 
-  if (phase === 'gameover') {
-    handleNameEntry(scene, time);
-    return;
+  /** @param {Puck} puck */
+  function puckOutside(puck) {
+    return ![puck.x, puck.y, puck.vx, puck.vy].every(Number.isFinite)
+      || puck.x < RULES.left - RADIUS || puck.x > RULES.right + RADIUS
+      || puck.y < RULES.ceiling - RADIUS || puck.y > RULES.floor + RADIUS;
   }
 
-  if (phase === 'saved') {
-    if (consumeAnyPressedControl(scene, ['START1', 'START2', 'P1_1', 'P2_1', 'P1_2', 'P2_2'])) {
-      returnToStart(scene);
-    }
-  }
-}
-
-function createBackground(scene) {
-  scene.add.rectangle(
-    GAME_WIDTH / 2,
-    GAME_HEIGHT / 2,
-    700,
-    450,
-    COLORS.fieldBg,
-    0.18,
-  );
-}
-
-function createHud(scene) {
-  scene.hud = {};
-
-  scene.hud.title = scene.add
-    .text(GAME_WIDTH / 2, 20, 'PLATANUS HACK 26 BRICKS', {
-      fontFamily: 'monospace',
-      fontSize: '22px',
-      color: '#f7fbff',
-      fontStyle: 'bold',
-      align: 'center',
-    })
-    .setOrigin(0.5, 0);
-
-  scene.hud.subtitle = scene.add
-    .text(
-      GAME_WIDTH / 2,
-      48,
-      '',
-      {
-        fontFamily: 'monospace',
-        fontSize: '11px',
-        color: '#a8ad8a',
-        align: 'center',
-      },
-    )
-    .setOrigin(0.5, 0);
-
-  scene.hud.p1Score = scene.add
-    .text(65, 72, 'P1 00', {
-      fontFamily: 'monospace',
-      fontSize: '28px',
-      color: '#e1ff00',
-      fontStyle: 'bold',
-    })
-    .setOrigin(0, 0.5);
-
-  scene.hud.p2Score = scene.add
-    .text(GAME_WIDTH - 65, 72, 'P2 00', {
-      fontFamily: 'monospace',
-      fontSize: '28px',
-      color: '#ff6ec7',
-      fontStyle: 'bold',
-    })
-    .setOrigin(1, 0.5);
-
-  scene.hud.remaining = scene.add
-    .text(GAME_WIDTH / 2, 72, 'BRICKS 000', {
-      fontFamily: 'monospace',
-      fontSize: '18px',
-      color: '#ffd84d',
-      fontStyle: 'bold',
-    })
-    .setOrigin(0.5);
-
-  scene.hud.status = scene.add
-    .text(GAME_WIDTH / 2, GAME_HEIGHT - 24, '', {
-      fontFamily: 'monospace',
-      fontSize: '14px',
-      color: '#f7fbff',
-      align: 'center',
-    })
-    .setOrigin(0.5);
-
-  scene.hud.scoreColors = {
-    p1: '#e1ff00',
-    p2: '#ff6ec7',
-    penalty: '#ff7a7a',
-  };
-}
-
-function createPlayfield(scene) {
-  scene.playfield = {};
-  const paddleWidth = 112;
-  const paddleHeight = 10;
-  const topBounceLineY = 118;
-  const bottomBounceLineY = GAME_HEIGHT - 72;
-  const wallThickness = 8;
-  const wallGap = 22;
-  const topPaddleY = topBounceLineY - paddleHeight / 2;
-  const bottomPaddleY = bottomBounceLineY + paddleHeight / 2;
-  const topWallY = topBounceLineY - wallGap - wallThickness / 2;
-  const bottomWallY = bottomBounceLineY + wallGap + wallThickness / 2;
-
-  // Walls span full width/height so corners are sealed — balls cannot escape through gaps.
-  scene.playfield.leftWall = scene.add.rectangle(38, GAME_HEIGHT / 2, 14, GAME_HEIGHT, COLORS.frame, 0);
-  scene.playfield.rightWall = scene.add.rectangle(GAME_WIDTH - 38, GAME_HEIGHT / 2, 14, GAME_HEIGHT, COLORS.frame, 0);
-  scene.playfield.topWall = scene.add.rectangle(
-    GAME_WIDTH / 2,
-    topWallY,
-    GAME_WIDTH,
-    wallThickness,
-    COLORS.frame,
-    0,
-  );
-  scene.playfield.bottomWall = scene.add.rectangle(
-    GAME_WIDTH / 2,
-    bottomWallY,
-    GAME_WIDTH,
-    wallThickness,
-    COLORS.frame,
-    0,
-  );
-
-  scene.physics.add.existing(scene.playfield.leftWall, true);
-  scene.physics.add.existing(scene.playfield.rightWall, true);
-  scene.physics.add.existing(scene.playfield.topWall, true);
-  scene.physics.add.existing(scene.playfield.bottomWall, true);
-
-  scene.add.rectangle(
-    GAME_WIDTH / 2,
-    topBounceLineY,
-    700,
-    1,
-    COLORS.frame,
-    0.55,
-  );
-  scene.add.rectangle(
-    GAME_WIDTH / 2,
-    bottomBounceLineY,
-    700,
-    1,
-    COLORS.frame,
-    0.55,
-  );
-
-  scene.playfield.p1Paddle = scene.add.rectangle(
-    GAME_WIDTH / 2,
-    topPaddleY,
-    paddleWidth,
-    paddleHeight,
-    COLORS.p1,
-    1,
-  );
-  scene.playfield.p2Paddle = scene.add.rectangle(
-    GAME_WIDTH / 2,
-    bottomPaddleY,
-    paddleWidth,
-    paddleHeight,
-    COLORS.p2,
-    1,
-  );
-
-  scene.physics.add.existing(scene.playfield.p1Paddle);
-  scene.physics.add.existing(scene.playfield.p2Paddle);
-
-  configurePaddleBody(scene.playfield.p1Paddle.body);
-  configurePaddleBody(scene.playfield.p2Paddle.body);
-
-  scene.playfield.balls = [
-    createBall(scene, GAME_WIDTH / 2 - 120, 170, COLORS.white, 'p1'),
-    createBall(scene, GAME_WIDTH / 2 + 120, GAME_HEIGHT - 170, COLORS.white, 'p2'),
-  ];
-
-  scene.playfield.bricks = scene.physics.add.staticGroup();
-  scene.playfield.ballTrails = scene.add.group();
-
-  for (const ball of scene.playfield.balls) {
-    scene.physics.add.collider(ball, scene.playfield.leftWall);
-    scene.physics.add.collider(ball, scene.playfield.rightWall);
-    scene.physics.add.collider(ball, scene.playfield.topWall);
-    scene.physics.add.collider(ball, scene.playfield.bottomWall);
-    scene.physics.add.collider(
-      ball,
-      scene.playfield.p1Paddle,
-      () => handleBallPaddleCollision(scene, ball, scene.playfield.p1Paddle, 'p1'),
-      () => canBallCollideWithPaddle(ball, 'p1'),
-      scene,
-    );
-    scene.physics.add.collider(
-      ball,
-      scene.playfield.p2Paddle,
-      () => handleBallPaddleCollision(scene, ball, scene.playfield.p2Paddle, 'p2'),
-      () => canBallCollideWithPaddle(ball, 'p2'),
-      scene,
-    );
-    scene.physics.add.collider(
-      ball,
-      scene.playfield.bricks,
-      (_, brick) => handleBallBrickCollision(scene, ball, brick),
-      undefined,
-      scene,
-    );
-  }
-}
-
-function createEndGameUi(scene) {
-  scene.endGame = {};
-
-  scene.endGame.container = scene.add.container(0, 0);
-  scene.endGame.container.setDepth(20);
-  scene.endGame.container.setVisible(false);
-
-  const backdrop = scene.add.rectangle(
-    GAME_WIDTH / 2,
-    GAME_HEIGHT / 2,
-    GAME_WIDTH,
-    GAME_HEIGHT,
-    COLORS.backdrop,
-    0.98,
-  );
-  scene.endGame.container.add(backdrop);
-
-  scene.endGame.title = scene.add
-    .text(GAME_WIDTH / 2, 88, 'GAME OVER', {
-      fontFamily: 'monospace',
-      fontSize: '30px',
-      color: '#f7ffd8',
-      fontStyle: 'bold',
-    })
-    .setOrigin(0.5);
-
-  scene.endGame.summary = scene.add
-    .text(GAME_WIDTH / 2, 126, '', {
-      fontFamily: 'monospace',
-      fontSize: '22px',
-      color: '#e1ff00',
-      align: 'center',
-    })
-    .setOrigin(0.5);
-
-  scene.endGame.nameLabel = scene.add
-    .text(GAME_WIDTH / 2, 172, '', {
-      fontFamily: 'monospace',
-      fontSize: '13px',
-      color: '#a8ad8a',
-      align: 'center',
-    })
-    .setOrigin(0.5);
-
-  scene.endGame.nameValue = scene.add
-    .text(GAME_WIDTH / 2, 208, '___', {
-      fontFamily: 'monospace',
-      fontSize: '36px',
-      color: '#ff6ec7',
-      fontStyle: 'bold',
-      align: 'center',
-      letterSpacing: 10,
-    })
-    .setOrigin(0.5);
-
-  scene.endGame.instructions = scene.add
-    .text(
-      GAME_WIDTH / 2,
-      242,
-      'MOVE  PICK',
-      {
-        fontFamily: 'monospace',
-        fontSize: '11px',
-        color: '#a8ad8a',
-        align: 'center',
-      },
-    )
-    .setOrigin(0.5);
-
-  scene.endGame.leaderboardTitle = scene.add
-    .text(GAME_WIDTH / 2, 286, 'SCOREBOARD', {
-      fontFamily: 'monospace',
-      fontSize: '14px',
-      color: '#e1ff00',
-      fontStyle: 'bold',
-      align: 'center',
-    })
-    .setOrigin(0.5);
-
-  scene.endGame.gridLabels = [];
-
-  for (let row = 0; row < LETTER_GRID.length; row += 1) {
-    const rowValues = LETTER_GRID[row];
-    const rowWidth = rowValues.length * 56;
-    for (let col = 0; col < rowValues.length; col += 1) {
-      const value = rowValues[col];
-      const cellX = GAME_WIDTH / 2 - rowWidth / 2 + 28 + col * 56;
-      const cellY = 430 + row * 28;
-
-      const cell = scene.add.rectangle(cellX, cellY, value.length > 1 ? 64 : 42, 24, COLORS.cell, 0.95);
-      cell.setStrokeStyle(2, COLORS.frame, 0.8);
-
-      const label = scene.add
-        .text(cellX, cellY, value, {
-          fontFamily: 'monospace',
-          fontSize: value.length > 1 ? '14px' : '18px',
-          color: '#f7fbff',
-          fontStyle: 'bold',
-          align: 'center',
-        })
-        .setOrigin(0.5);
-
-      scene.endGame.gridLabels.push({ cell, label, row, col, value });
-      scene.endGame.container.add(cell);
-      scene.endGame.container.add(label);
+  /** @param {Puck} puck */
+  function steadyPuck(puck) {
+    const speed = capPuckSpeed(puck);
+    const sx = Math.sign(puck.vx) || Math.sign(CENTER_X - puck.x);
+    const sy = Math.sign(puck.vy) || (puck.y >= (RULES.ceiling + RULES.floor) / 2 ? -1 : 1);
+    if (sx && Math.abs(puck.vx) < speed * RULES.minHorizontal) {
+      puck.vx = sx * speed * RULES.minHorizontal;
+      puck.vy = sy * Math.sqrt(speed * speed - puck.vx * puck.vx);
+    } else if (Math.abs(puck.vy) < speed * RULES.minVertical) {
+      puck.vy = sy * speed * RULES.minVertical;
+      puck.vx = sx * Math.sqrt(speed * speed - puck.vy * puck.vy);
     }
   }
 
-  scene.endGame.saveStatus = scene.add
-    .text(GAME_WIDTH / 2, 590, '', {
-      fontFamily: 'monospace',
-      fontSize: '11px',
-      color: '#e1ff00',
-      align: 'center',
-    })
-    .setOrigin(0.5);
-
-  scene.endGame.leaderboard = scene.add
-    .text(GAME_WIDTH / 2, 308, '', {
-      fontFamily: 'monospace',
-      fontSize: '12px',
-      color: '#f7ffd8',
-      align: 'center',
-      lineSpacing: 4,
-    })
-    .setOrigin(0.5, 0);
-
-  scene.endGame.container.add(scene.endGame.title);
-  scene.endGame.container.add(scene.endGame.summary);
-  scene.endGame.container.add(scene.endGame.nameLabel);
-  scene.endGame.container.add(scene.endGame.nameValue);
-  scene.endGame.container.add(scene.endGame.instructions);
-  scene.endGame.container.add(scene.endGame.leaderboardTitle);
-  scene.endGame.container.add(scene.endGame.leaderboard);
-  scene.endGame.container.add(scene.endGame.saveStatus);
-}
-
-function createControls(scene) {
-  scene.controls = {
-    held: Object.create(null),
-    pressed: Object.create(null),
-  };
-
-  const onKeyDown = (event) => {
-    const key = normalizeIncomingKey(event.key);
-    if (!key) {
-      return;
-    }
-
-    const arcadeCode = KEYBOARD_TO_ARCADE[key];
-    if (!arcadeCode) {
-      return;
-    }
-
-    if (!scene.controls.held[arcadeCode]) {
-      scene.controls.pressed[arcadeCode] = true;
-    }
-    scene.controls.held[arcadeCode] = true;
-  };
-
-  const onKeyUp = (event) => {
-    const key = normalizeIncomingKey(event.key);
-    if (!key) {
-      return;
-    }
-
-    const arcadeCode = KEYBOARD_TO_ARCADE[key];
-    if (!arcadeCode) {
-      return;
-    }
-
-    scene.controls.held[arcadeCode] = false;
-  };
-
-  window.addEventListener('keydown', onKeyDown);
-  window.addEventListener('keyup', onKeyUp);
-
-  scene.events.once('shutdown', () => {
-    window.removeEventListener('keydown', onKeyDown);
-    window.removeEventListener('keyup', onKeyUp);
-  });
-}
-
-function startMatch(scene) {
-  scene.physics.resume();
-  scene.startScreen.container.setVisible(false);
-  buildTextBricks(scene);
-  resetBalls(scene);
-  scene.state.scores = { p1: 0, p2: 0 };
-  refreshHud(scene);
-  scene.state.phase = 'playing';
-  scene.hud.status.setText('');
-}
-
-function createStartScreen(scene) {
-  scene.startScreen = {};
-  const c = scene.add.container(0, 0);
-  c.setDepth(15);
-  scene.startScreen.container = c;
-
-  c.add(scene.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, COLORS.overlay, 0.97));
-
-  c.add(
-    scene.add
-      .text(GAME_WIDTH / 2, 88, 'PLATANUS HACK 26', {
-        fontFamily: 'monospace', fontSize: '16px', color: '#a8c700',
-      })
-      .setOrigin(0.5),
-  );
-  const titleMain = scene.add
-    .text(GAME_WIDTH / 2, 150, 'SANTIAGO EDITION', {
-      fontFamily: 'monospace', fontSize: '38px', color: '#e1ff00', fontStyle: 'bold',
-    })
-    .setOrigin(0.5);
-  c.add(titleMain);
-  scene.tweens.add({
-    targets: titleMain,
-    scale: 1.025,
-    alpha: 0.88,
-    duration: 1100,
-    yoyo: true,
-    repeat: -1,
-    ease: 'Sine.easeInOut',
-  });
-
-  scene.startScreen.buttons = [];
-  const buttonLabels = ['PLAY', 'LEADERBOARD', 'CONTROLS'];
-  for (let i = 0; i < buttonLabels.length; i += 1) {
-    const y = 232 + i * 50;
-    const bg = scene.add.rectangle(GAME_WIDTH / 2, y, 280, 42, COLORS.cell, 0.95);
-    bg.setStrokeStyle(2, COLORS.frame, 0.8);
-    const label = scene.add
-      .text(GAME_WIDTH / 2, y, buttonLabels[i], {
-        fontFamily: 'monospace', fontSize: '22px', color: '#f7ffd8', fontStyle: 'bold',
-      })
-      .setOrigin(0.5);
-    c.add(bg);
-    c.add(label);
-    scene.startScreen.buttons.push({ bg, label });
-  }
-
-  c.add(
-    scene.add
-      .text(GAME_WIDTH / 2, 380, 'SCOREBOARD', {
-        fontFamily: 'monospace', fontSize: '14px', color: '#e1ff00', fontStyle: 'bold',
-      })
-      .setOrigin(0.5),
-  );
-  scene.startScreen.leaderboard = scene.add
-    .text(GAME_WIDTH / 2, 402, '', {
-      fontFamily: 'monospace', fontSize: '13px', color: '#f7ffd8', align: 'center', lineSpacing: 4,
-    })
-    .setOrigin(0.5, 0);
-  c.add(scene.startScreen.leaderboard);
-
-  c.add(
-    scene.add
-      .text(GAME_WIDTH / 2, GAME_HEIGHT - 22, 'MOVE ↕   CONFIRM B / START', {
-        fontFamily: 'monospace', fontSize: '11px', color: '#6f7a4a',
-      })
-      .setOrigin(0.5),
-  );
-
-  c.setVisible(false);
-}
-
-function showStartScreen(scene) {
-  scene.state.phase = 'start';
-  scene.state.menu = { cursor: 0, cooldown: 0, lastAxis: 0 };
-  refreshStartScreenLeaderboard(scene);
-  updateStartMenuHighlight(scene);
-  scene.startScreen.container.setVisible(true);
-}
-
-function createLeaderboardScreen(scene) {
-  scene.leaderScreen = {};
-  const c = scene.add.container(0, 0);
-  c.setDepth(16);
-  scene.leaderScreen.container = c;
-
-  c.add(scene.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, COLORS.overlay, 0.98));
-  c.add(
-    scene.add
-      .text(GAME_WIDTH / 2, 90, 'LEADERBOARD', {
-        fontFamily: 'monospace', fontSize: '30px', color: '#e1ff00', fontStyle: 'bold',
-      })
-      .setOrigin(0.5),
-  );
-
-  scene.leaderScreen.list = scene.add
-    .text(GAME_WIDTH / 2, 160, '', {
-      fontFamily: 'monospace', fontSize: '20px', color: '#f7ffd8',
-      align: 'center', lineSpacing: 12,
-    })
-    .setOrigin(0.5, 0);
-  c.add(scene.leaderScreen.list);
-
-  c.add(
-    scene.add
-      .text(GAME_WIDTH / 2, GAME_HEIGHT - 28, 'PRESS START TO GO BACK', {
-        fontFamily: 'monospace', fontSize: '12px', color: '#6f7a4a',
-      })
-      .setOrigin(0.5),
-  );
-
-  c.setVisible(false);
-}
-
-function createControlsScreen(scene) {
-  scene.controlsScreen = {};
-  const c = scene.add.container(0, 0);
-  c.setDepth(16);
-  scene.controlsScreen.container = c;
-
-  c.add(scene.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, COLORS.overlay, 0.98));
-  c.add(
-    scene.add
-      .text(GAME_WIDTH / 2, 110, 'CONTROLS', {
-        fontFamily: 'monospace', fontSize: '30px', color: '#e1ff00', fontStyle: 'bold',
-      })
-      .setOrigin(0.5),
-  );
-
-  const lines = [
-    'P1   MOVE  A / D',
-    'P1   DASH  U',
-    '',
-    'P2   MOVE  ← / →',
-    'P2   DASH  R',
-    '',
-    'PAUSE      ENTER',
-  ];
-  c.add(
-    scene.add
-      .text(GAME_WIDTH / 2, 200, lines.join('\n'), {
-        fontFamily: 'monospace', fontSize: '18px', color: '#f7ffd8',
-        align: 'center', lineSpacing: 8,
-      })
-      .setOrigin(0.5, 0),
-  );
-
-  c.add(
-    scene.add
-      .text(GAME_WIDTH / 2, GAME_HEIGHT - 28, 'PRESS START TO GO BACK', {
-        fontFamily: 'monospace', fontSize: '12px', color: '#6f7a4a',
-      })
-      .setOrigin(0.5),
-  );
-
-  c.setVisible(false);
-}
-
-function showControlsScreen(scene) {
-  scene.startScreen.container.setVisible(false);
-  scene.controlsScreen.container.setVisible(true);
-  scene.state.phase = 'controls';
-}
-
-function showLeaderboardScreen(scene) {
-  const lines = scene.state.highScores.length
-    ? scene.state.highScores.map((e, i) =>
-        `${String(i + 1).padStart(2, '0')}  ${e.name.padEnd(3, ' ')}  ${String(e.score).padStart(3, ' ')}  ${e.winner}`,
-      )
-    : ['NO SAVED SCORES YET'];
-  scene.leaderScreen.list.setText(lines.join('\n'));
-  scene.startScreen.container.setVisible(false);
-  scene.leaderScreen.container.setVisible(true);
-  scene.state.phase = 'leaderboard';
-}
-
-function refreshStartScreenLeaderboard(scene) {
-  const lines = scene.state.highScores.length
-    ? scene.state.highScores.map((e, i) =>
-        `${String(i + 1).padStart(2, '0')} ${e.name.padEnd(3, ' ')} ${String(e.score).padStart(2, '0')} ${e.winner}`,
-      )
-    : ['NO SAVED SCORES YET'];
-  scene.startScreen.leaderboard.setText(lines.join('\n'));
-}
-
-function updateStartMenuHighlight(scene) {
-  const cursor = scene.state.menu.cursor;
-  scene.startScreen.buttons.forEach(({ bg, label }, i) => {
-    const active = i === cursor;
-    bg.setFillStyle(active ? COLORS.accent : COLORS.cell, active ? 1 : 0.95);
-    bg.setStrokeStyle(2, active ? COLORS.white : COLORS.frame, active ? 1 : 0.8);
-    label.setColor(active ? '#04110b' : '#f7ffd8');
-  });
-}
-
-function handleStartMenu(scene, time) {
-  const menu = scene.state.menu;
-  const axisY = getVerticalMenuAxis(scene.controls);
-
-  if (time >= menu.cooldown && axisY !== 0 && menu.lastAxis !== axisY) {
-    menu.cursor = Phaser.Math.Wrap(menu.cursor + axisY, 0, scene.startScreen.buttons.length);
-    menu.cooldown = time + 160;
-    updateStartMenuHighlight(scene);
-    playSound(scene, 'click');
-  }
-  if (axisY === 0) {
-    menu.lastAxis = 0;
-  } else {
-    menu.lastAxis = axisY;
-  }
-
-  if (consumeAnyPressedControl(scene, ['P1_1', 'P2_1', 'P1_2', 'P2_2', 'START1', 'START2'])) {
-    playSound(scene, 'select');
-    startAmbientMusic(scene);
-    if (menu.cursor === 0) {
-      startMatch(scene);
-    } else if (menu.cursor === 1) {
-      showLeaderboardScreen(scene);
+  /** @param {Fighter} fighter @param {PlayerInput} input @param {number} now */
+  function moveFighter(fighter, input, now) {
+    fighter.oldX = fighter.x;
+    fighter.oldY = fighter.y;
+    if (fighter.pips && now >= fighter.decayAt) fighter.pips = 0;
+    if (fighter.swing && now - fighter.swing.at >= SWING_END) fighter.swing = null;
+    const blocked = now < fighter.blockedUntil;
+    if (blocked) {
+      fighter.vx = fighter.shove;
+      fighter.shove = approach(fighter.shove, 0, RULES.shoveBrake * STEP);
     } else {
-      showControlsScreen(scene);
+      fighter.stunned = false;
+      fighter.shove = 0;
+      if (input.strike) fighter.strikeUntil = now + ticks(RULES.strikeBuffer) - 1;
+      if (input.move && (!fighter.swing || now - fighter.swing.at >= HIT_END)) fighter.face = input.move;
+      if (!fighter.swing) {
+        if (now <= fighter.strikeUntil) {
+          fighter.swing = { at: now, fighter: false, puck: false };
+          fighter.strikeUntil = -1;
+        }
+      }
+      if (input.jump) fighter.jumpUntil = now + ticks(RULES.jumpBuffer) - 1;
+      if (fighter.grounded && now <= fighter.jumpUntil) {
+        fighter.vy = -RULES.jumpSpeed;
+        fighter.grounded = false;
+        fighter.jumpUntil = -1;
+      }
+      const speed = fighter.grounded ? RULES.groundSpeed : RULES.airSpeed;
+      const reversing = input.move * fighter.vx < 0;
+      const ramp = reversing ? RULES.groundTurn : input.move ? RULES.groundRamp : RULES.groundStop;
+      const acceleration = fighter.grounded ? speed / ramp : input.move ? RULES.airAcceleration : RULES.airBrake;
+      const target = input.move * speed * (fighter.swing ? RULES.strikeMove : 1);
+      fighter.vx = clamp(approach(fighter.vx, reversing ? 0 : target, acceleration * STEP), -speed, speed);
+    }
+    const nextX = fighter.x + fighter.vx * STEP;
+    fighter.x = clamp(nextX, RULES.left + HALF_BODY, RULES.right - HALF_BODY);
+    if (fighter.x !== nextX) fighter.vx = 0;
+    const gravity = fighter.vy < 0 ? RULES.riseGravity : RULES.fallGravity;
+    fighter.y += fighter.vy * STEP + gravity * STEP * STEP / 2;
+    fighter.vy += gravity * STEP;
+    if (fighter.y >= RULES.floor) {
+      fighter.y = RULES.floor;
+      fighter.vy = 0;
+      fighter.grounded = true;
+    } else {
+      fighter.grounded = false;
+      if (fighter.y < RULES.ceiling + RULES.fighterHeight) {
+        fighter.y = RULES.ceiling + RULES.fighterHeight;
+        fighter.vy = Math.max(0, fighter.vy);
+      }
     }
   }
-}
 
-function createPauseScreen(scene) {
-  scene.pauseScreen = {};
-  const c = scene.add.container(0, 0);
-  c.setDepth(25);
-  scene.pauseScreen.container = c;
+  /** @param {Fighter[]} fighters */
+  function resolveFighters([a, b]) {
+    const width = RULES.fighterWidth;
+    const height = RULES.fighterHeight;
+    const overlapX = width - Math.abs(a.x - b.x);
+    const overlapY = height - Math.abs(a.y - b.y);
+    if (overlapX <= EPSILON || overlapY <= EPSILON) return;
 
-  c.add(scene.add.rectangle(GAME_WIDTH / 2, GAME_HEIGHT / 2, GAME_WIDTH, GAME_HEIGHT, COLORS.overlay, 0.82));
-  c.add(
-    scene.add
-      .text(GAME_WIDTH / 2, GAME_HEIGHT / 2 - 28, 'PAUSED', {
-        fontFamily: 'monospace', fontSize: '52px', color: '#e1ff00', fontStyle: 'bold',
-      })
-      .setOrigin(0.5),
-  );
-  c.add(
-    scene.add
-      .text(GAME_WIDTH / 2, GAME_HEIGHT / 2 + 34, 'PRESS START TO RESUME', {
-        fontFamily: 'monospace', fontSize: '16px', color: '#a8ad8a',
-      })
-      .setOrigin(0.5),
-  );
+    const separatedX = Math.abs(a.oldX - b.oldX) >= width - EPSILON;
+    const separatedY = Math.abs(a.oldY - b.oldY) >= height - EPSILON;
+    if (separatedX === separatedY ? overlapY < overlapX : separatedY) {
+      const [upper, lower] = a.y < b.y ? [a, b] : [b, a];
+      const lift = Math.min(overlapY, Math.max(0, upper.y - RULES.ceiling - height));
+      upper.y -= lift;
+      lower.y += overlapY - lift;
+      if (lift < overlapY && lower.vy < 0) lower.vy = 0;
+      if (upper.vy >= lower.vy) upper.vy = lower.vy;
+      upper.grounded = lower.grounded && upper.vy >= 0;
+      return;
+    }
 
-  c.setVisible(false);
-}
+    const [left, right] = a.oldX < b.oldX || (a.oldX === b.oldX && a.x <= b.x) ? [a, b] : [b, a];
+    const penetration = width - (right.x - left.x);
+    const leftTravel = Math.max(0, left.x - left.oldX);
+    const rightTravel = Math.max(0, right.oldX - right.x);
+    const total = leftTravel + rightTravel;
+    const share = total > EPSILON ? leftTravel / total : 0.5;
+    const leftRoom = left.x - (RULES.left + HALF_BODY);
+    const rightRoom = RULES.right - HALF_BODY - right.x;
+    // Undo inward travel. Walking into a stationary defender does not push them.
+    const retract = clamp(penetration * share, Math.max(0, penetration - rightRoom), Math.min(penetration, leftRoom));
+    left.x -= retract;
+    right.x += penetration - retract;
+    if (left.vx > 0) left.vx = 0;
+    if (right.vx < 0) right.vx = 0;
+    if (left.shove > 0) left.shove = 0;
+    if (right.shove < 0) right.shove = 0;
+  }
 
-function pauseMatch(scene) {
-  scene.state.phase = 'paused';
-  scene.physics.pause();
-  scene.pauseScreen.container.setVisible(true);
-}
+  const POSTS = [RULES.left, RULES.right].map((edge, side) => {
+    const minX = side === 0 ? edge - RADIUS * 2 : edge;
+    const maxX = side === 0 ? edge : edge + RADIUS * 2;
+    return [
+      { minX, maxX, minY: RULES.ceiling, maxY: RULES.mouthTop },
+      { minX, maxX, minY: RULES.mouthBottom, maxY: RULES.floor }
+    ];
+  });
 
-function resumeMatch(scene) {
-  scene.pauseScreen.container.setVisible(false);
-  scene.physics.resume();
-  scene.state.phase = 'playing';
-}
+  class Match {
+    constructor() {
+      /** @type {Phase} */
+      this.phase = 'title';
+      this.phaseAge = 0;
+      this.liveTick = 0;
+      this.clock = ticks(RULES.regulation);
+      this.overtime = false;
+      this.score = [0, 0];
+      this.ready = [0, 0];
+      this.fighters = [spawnFighter(0), spawnFighter(1)];
+      this.puck = spawnPuck(0);
+      /** @type {Gate[]} */
+      this.gates = [{ owner: 0, until: 0 }, { owner: 1, until: 0 }];
+      /** @type {MatchEvent[]} */
+      this.events = [];
+      this.openingDirection = -1;
+      this.serveDirection = 1;
+      this.launchDirection = 1;
+      this.faceoffDuration = 0;
+      this.scorer = -1;
+      this.winner = -1;
+      this.lastClang = -100;
+      this.lastRail = -100;
+    }
 
-function returnToStart(scene) {
-  scene.state.winner = null;
-  scene.state.nameEntry.letters = [];
-  scene.endGame.container.setVisible(false);
-  refreshLeaderboard(scene);
-  showStartScreen(scene);
-}
+    /** @param {Phase} phase */
+    setPhase(phase) {
+      this.phase = phase;
+      this.phaseAge = 0;
+    }
 
-function configurePaddleBody(body) {
-  body.setImmovable(true);
-  body.allowGravity = false;
-  body.setCollideWorldBounds(false);
-}
+    /** @param {Cue} cue @param {number} x @param {number} y @param {number} [side] */
+    emit(cue, x, y, side = -1) {
+      this.events.push({ cue, x, y, side });
+    }
 
-function createBall(scene, x, y, color, startingOwner) {
-  const ball = scene.add.circle(x, y, 7, color, 1);
-  scene.physics.add.existing(ball);
+    /** @param {number} side */
+    gateOpen(side) { return this.gates[side].until > this.liveTick; }
 
-  ball.body.setCircle(7);
-  ball.body.setBounce(1, 1);
-  ball.body.setCollideWorldBounds(false);
-  ball.body.setAllowGravity(false);
-  ball.body.setDrag(0, 0);
-  ball.body.setMaxVelocity(340, 340);
-  ball.glowColor = color;
-  ball.lastTouchedBy = startingOwner;
-  ball.ghostFor = { p1: false, p2: false };
-  ball.previousY = y;
+    start() {
+      this.score = [0, 0];
+      this.ready = [0, 0];
+      this.overtime = false;
+      this.clock = ticks(RULES.regulation);
+      this.liveTick = 0;
+      this.lastClang = -100;
+      this.lastRail = -100;
+      this.winner = -1;
+      this.scorer = -1;
+      this.openingDirection *= -1;
+      this.serveDirection = this.openingDirection;
+      this.faceoff(RULES.opening);
+    }
 
-  return ball;
-}
+    /** @param {number} seconds */
+    faceoff(seconds) {
+      this.fighters = [spawnFighter(0), spawnFighter(1)];
+      this.puck = spawnPuck(this.liveTick);
+      for (const gate of this.gates) gate.until = 0;
+      this.faceoffDuration = ticks(seconds);
+      this.setPhase('faceoff');
+    }
 
-function buildTextBricks(scene) {
-  scene.playfield.bricks.clear(true, true);
+    /** @param {number} direction */
+    launch(direction) {
+      const angle = radians(RULES.serveAngle);
+      this.puck.vx = direction * RULES.serveSpeed * Math.cos(angle);
+      this.puck.vy = RULES.serveSpeed * Math.sin(angle);
+      this.puck.stillSince = this.liveTick;
+      this.launchDirection = direction;
+      this.setPhase('live');
+      this.emit('serve', this.puck.x, this.puck.y);
+    }
 
-  // SANTIAGO in a 4×7 pixel font, centered across the cabinet playfield. Eight letters
-  // need 39 columns (4 each plus a gap): at 17 px a column they span 663 px, inside the
-  // same 680 px field the 20 px columns of shorter words used.
-  const WORD = 'SANTIAGO';
-  const CELL = 17;
-  const letters = {
-    S: ['0111', '1000', '1000', '0110', '0001', '0001', '1110'],
-    A: ['0110', '1001', '1001', '1111', '1001', '1001', '1001'],
-    N: ['1001', '1101', '1101', '1011', '1011', '1001', '1001'],
-    T: ['1111', '0110', '0110', '0110', '0110', '0110', '0110'],
-    I: ['1111', '0110', '0110', '0110', '0110', '0110', '1111'],
-    G: ['0111', '1000', '1000', '1011', '1001', '1001', '0111'],
-    O: ['0110', '1001', '1001', '1001', '1001', '1001', '0110'],
+    /** @param {PlayerInput[]} input */
+    join(input) {
+      for (const [side, controls] of input.entries()) {
+        this.ready[side] = Math.max(0, this.ready[side] - 1);
+        if (controls.start) {
+          if (!this.ready[side]) this.emit('ready', 0, 0, side);
+          this.ready[side] = ticks(RULES.readyTimeout);
+        }
+      }
+      if (this.ready.every(Boolean)) this.start();
+    }
+
+    /** @param {PlayerInput[]} input */
+    step(input) {
+      this.phaseAge++;
+      switch (this.phase) {
+        case 'title':
+          this.join(input);
+          break;
+        case 'faceoff':
+          if (this.faceoffDuration - this.phaseAge === RULES.hz) this.emit('count', 0, 0);
+          if (this.phaseAge >= this.faceoffDuration) {
+            this.launch(this.serveDirection);
+            this.serveDirection *= -1;
+          }
+          break;
+        case 'live':
+          this.playTick(input);
+          break;
+        case 'goal':
+          if (this.phaseAge >= ticks(RULES.goalCue)) {
+            if (this.overtime || this.score[this.scorer] >= RULES.goalsToWin) this.finish(this.scorer);
+            else if (this.clock === 0) this.expire();
+            else this.faceoff(RULES.faceoff);
+          }
+          break;
+        case 'repair':
+          this.clock = Math.max(0, this.clock - 1);
+          if (this.clock === 0) this.expire();
+          else if (this.phaseAge >= ticks(RULES.repair)) this.launch(-this.launchDirection);
+          break;
+        case 'result':
+          if (this.phaseAge >= ticks(RULES.resultLock) && input.some(controls => controls.start)) {
+            this.returnToTitle();
+            this.join(input);
+          } else if (this.phaseAge >= ticks(RULES.resultTimeout)) {
+            this.returnToTitle();
+          }
+          break;
+      }
+    }
+
+    returnToTitle() {
+      this.ready = [0, 0];
+      this.faceoff(RULES.opening);
+      this.setPhase('title');
+    }
+
+    /** @param {number} winner */
+    finish(winner) {
+      this.winner = winner;
+      this.setPhase('result');
+      this.emit('result', 0, 0, winner);
+    }
+
+    expire() {
+      if (this.score[0] !== this.score[1]) {
+        this.finish(this.score[0] > this.score[1] ? 0 : 1);
+      } else if (this.overtime) {
+        this.finish(-1);
+      } else {
+        this.overtime = true;
+        this.clock = ticks(RULES.overtime);
+        this.faceoff(RULES.opening);
+      }
+    }
+
+    /** @param {PlayerInput[]} input */
+    playTick(input) {
+      this.liveTick++;
+      for (const gate of this.gates) {
+        if (gate.until - this.liveTick === ticks(1)) {
+          this.emit('warning', gate.owner === 0 ? RULES.left : RULES.right, GOAL_Y, gate.owner);
+        }
+      }
+      for (const [side, fighter] of this.fighters.entries()) moveFighter(fighter, input[side], this.liveTick);
+      resolveFighters(this.fighters);
+      const puck = this.puck;
+      const escaped = puckOutside(puck);
+      this.resolveStrikes(!escaped);
+      puck.oldX = puck.x;
+      puck.oldY = puck.y;
+      const goalOwner = escaped ? -1 : this.movePuck();
+      this.clock = Math.max(0, this.clock - 1);
+      if (goalOwner !== -1) {
+        this.scorer = 1 - goalOwner;
+        this.score[this.scorer]++;
+        this.emit('goal', puck.x, puck.y, this.scorer);
+        this.setPhase('goal');
+      } else if (this.clock === 0) {
+        this.expire();
+      } else if (this.puckNeedsRepair()) {
+        this.puck = spawnPuck(this.liveTick);
+        this.setPhase('repair');
+      }
+    }
+
+    /** @param {boolean} puckPlayable */
+    resolveStrikes(puckPlayable = true) {
+      const now = this.liveTick;
+      const candidates = this.fighters.map((fighter, side) => {
+        const swing = fighter.swing;
+        if (!swing || now - swing.at < HIT_START || now - swing.at >= HIT_END) return null;
+        if (now - swing.at === HIT_START) this.emit('swing', fighter.x, fighter.y, side);
+        const target = this.fighters[1 - side];
+        const area = strikeBox(fighter);
+        const hit = !swing.fighter && now >= target.protectedUntil && overlaps(area, bodyBox(target));
+        const shot = puckPlayable && !swing.puck && circleContact(this.puck, area) !== null;
+        if (hit) swing.fighter = true;
+        if (shot) swing.puck = true;
+        return { hit, shot, face: fighter.face, ground: fighter.grounded };
+      });
+      for (const [side, candidate] of candidates.entries()) {
+        if (candidate?.hit) this.acceptHit(side, candidate.face);
+      }
+      if (candidates.every(candidate => candidate?.shot)) {
+        this.emit('clash', this.puck.x, this.puck.y);
+        return;
+      }
+      for (const [side, candidate] of candidates.entries()) {
+        if (!candidate?.shot) continue;
+        const angle = radians(candidate.ground ? RULES.groundShot : RULES.airShot);
+        const puck = this.puck;
+        puck.vx = candidate.face * Math.cos(angle) * RULES.shotSpeed;
+        puck.vy = Math.sin(angle) * RULES.shotSpeed;
+        puck.shooter = side;
+        puck.powerUntil = now + ticks(FEEL.trail);
+        puck.stillSince = now;
+        puck.watched = { minX: puck.x, maxX: puck.x, minY: puck.y, maxY: puck.y };
+        this.emit('shot', puck.x, puck.y, side);
+      }
+    }
+
+    /** @param {number} attacker @param {number} face */
+    acceptHit(attacker, face) {
+      const target = this.fighters[1 - attacker];
+      const now = this.liveTick;
+      target.pips++;
+      target.stunned = target.pips === 3;
+      if (target.stunned) target.pips = 0;
+      target.decayAt = now + ticks(RULES.pipDecay);
+      target.blockedUntil = now + ticks(target.stunned ? RULES.stun : RULES.recoil);
+      target.protectedUntil = target.blockedUntil + ticks(RULES.protection);
+      target.swing = null;
+      target.jumpUntil = -1;
+      target.strikeUntil = -1;
+      target.shove = face * RULES.shove;
+      this.emit('hit', target.x, target.y - 28, attacker);
+      if (!this.gateOpen(target.side)) {
+        this.gates[target.side].until = now + ticks(RULES.open);
+        this.emit('unlock', target.side === 0 ? RULES.left : RULES.right, GOAL_Y, target.side);
+      }
+    }
+
+    /** @param {number} oldX @param {number} oldY */
+    resolveRink(oldX, oldY) {
+      const puck = this.puck;
+      if (puck.y < RULES.ceiling + RADIUS || puck.y > RULES.floor - RADIUS) {
+        const normal = puck.y < RULES.ceiling + RADIUS ? 1 : -1;
+        puck.y = clamp(puck.y, RULES.ceiling + RADIUS, RULES.floor - RADIUS);
+        if (reflect(puck, 0, normal) && this.liveTick - this.lastRail >= ticks(0.16)) {
+          this.lastRail = this.liveTick;
+          this.emit('rail', puck.x, puck.y);
+        }
+      }
+      for (const gate of this.gates) {
+        const side = gate.owner;
+        const edge = side === 0 ? RULES.left : RULES.right;
+        const inward = side === 0 ? 1 : -1;
+        const reach = (puck.x - edge) * inward;
+        if (reach >= RADIUS) continue;
+
+        if (this.gateOpen(side)) {
+          const post = circleContact(puck, POSTS[side][puck.y < GOAL_Y ? 0 : 1]);
+          if (post) {
+            separate(puck, post);
+            reflect(puck, post.x, post.y);
+            // A rim contact ends this attempt even if the corner normal points down.
+            reflect(puck, inward, 0);
+            if ((puck.x - edge) * inward < RADIUS) puck.x = edge + RADIUS * inward;
+          } else if ((oldX - edge) * inward >= 0 && reach <= 0 && puck.vx * inward < 0) {
+            const ratio = clamp((edge - oldX) / (puck.x - oldX || EPSILON), 0, 1);
+            const atY = oldY + (puck.y - oldY) * ratio;
+            if (atY >= RULES.mouthTop + RADIUS && atY <= RULES.mouthBottom - RADIUS) {
+              puck.x = edge;
+              puck.y = atY;
+              return side;
+            }
+          }
+          if ((puck.x - edge) * inward >= 0) continue;
+        }
+        puck.x = edge + RADIUS * inward;
+        if (reflect(puck, inward, 0) && this.liveTick - this.lastClang >= ticks(0.12)) {
+          this.lastClang = this.liveTick;
+          this.emit('clang', puck.x, puck.y, side);
+        }
+      }
+      return -1;
+    }
+
+    movePuck() {
+      const puck = this.puck;
+      capPuckSpeed(puck);
+      for (let part = 1; part <= RULES.puckSubsteps; part++) {
+        const oldX = puck.x;
+        const oldY = puck.y;
+        puck.x += puck.vx * STEP / RULES.puckSubsteps;
+        puck.y += puck.vy * STEP / RULES.puckSubsteps;
+        const goalOwner = this.resolveRink(oldX, oldY);
+        if (goalOwner !== -1) return goalOwner;
+        const fraction = part / RULES.puckSubsteps;
+        const boxes = this.fighters.map(fighter => {
+          const box = bodyBox(fighter);
+          const dx = (fighter.oldX - fighter.x) * (1 - fraction);
+          const dy = (fighter.oldY - fighter.y) * (1 - fraction);
+          box.minX += dx;
+          box.maxX += dx;
+          box.minY += dy;
+          box.maxY += dy;
+          return box;
+        });
+        this.resolveBodies(boxes);
+      }
+      return -1;
+    }
+
+    /** @param {Box[]} boxes */
+    resolveBodies(boxes) {
+      const puck = this.puck;
+      if (puck.shooter !== -1 && !circleContact(puck, boxes[puck.shooter])) puck.shooter = -1;
+      const contacts = boxes.map((box, side) => side === puck.shooter ? null : circleContact(puck, box));
+      const [first, second] = contacts;
+      if (!first && !second) return;
+      let bounced = false;
+      if (first && second) {
+        const nx = first.x + second.x;
+        const ny = first.y + second.y;
+        const length = Math.hypot(nx, ny);
+        if (length > EPSILON) {
+          const normalX = nx / length;
+          const normalY = ny / length;
+          const depth = Math.max(first.depth, second.depth) / Math.max(0.25, normalX * first.x + normalY * first.y);
+          separate(puck, { x: normalX, y: normalY, depth });
+          bounced = reflect(puck, normalX, normalY);
+        } else {
+          puck.vx *= -1;
+          puck.vy *= -1;
+          bounced = true;
+        }
+      } else {
+        const contact = first || second;
+        if (!contact) return;
+        separate(puck, contact);
+        bounced = reflect(puck, contact.x, contact.y);
+      }
+      // Separation stays a radius inside the rink. A goal requires actual outward flight.
+      puck.x = clamp(puck.x, RULES.left + RADIUS, RULES.right - RADIUS);
+      puck.y = clamp(puck.y, RULES.ceiling + RADIUS, RULES.floor - RADIUS);
+      const solidBodies = puck.shooter === -1 ? boxes : [boxes[1 - puck.shooter]];
+      if (solidBodies.some(box => circleContact(puck, box))) {
+        bounced = this.releasePuck(solidBodies) || bounced;
+      }
+      if (bounced) steadyPuck(puck);
+    }
+
+    /** @param {Box[]} boxes */
+    releasePuck(boxes) {
+      const puck = this.puck;
+      const x = puck.x;
+      const y = puck.y;
+      const padding = RADIUS + EPSILON;
+      const candidates = boxes.flatMap(box => [
+        { x, y: box.minY - padding, nx: 0, ny: -1 },
+        { x, y: box.maxY + padding, nx: 0, ny: 1 },
+        { x: box.minX - padding, y, nx: -1, ny: 0 },
+        { x: box.maxX + padding, y, nx: 1, ny: 0 }
+      ]).filter(point => point.x >= RULES.left + RADIUS && point.x <= RULES.right - RADIUS
+        && point.y >= RULES.ceiling + RADIUS && point.y <= RULES.floor - RADIUS
+        && !boxes.some(box => circleContact({ ...point, vx: puck.vx, vy: puck.vy }, box)));
+      candidates.sort((a, b) => {
+        const distance = Math.hypot(a.x - x, a.y - y) - Math.hypot(b.x - x, b.y - y);
+        if (Math.abs(distance) > EPSILON) return distance;
+        return (b.x - a.x) * puck.vx + (b.y - a.y) * puck.vy;
+      });
+      const exit = candidates[0];
+      if (!exit) return false;
+      puck.x = exit.x;
+      puck.y = exit.y;
+      return reflect(puck, exit.nx, exit.ny);
+    }
+
+    puckNeedsRepair() {
+      const puck = this.puck;
+      if (puckOutside(puck)) return true;
+
+      const bounds = puck.watched;
+      bounds.minX = Math.min(bounds.minX, puck.x);
+      bounds.maxX = Math.max(bounds.maxX, puck.x);
+      bounds.minY = Math.min(bounds.minY, puck.y);
+      bounds.maxY = Math.max(bounds.maxY, puck.y);
+      if (bounds.maxX - bounds.minX > RULES.stuckSpan || bounds.maxY - bounds.minY > RULES.stuckSpan) {
+        puck.stillSince = this.liveTick;
+        puck.watched = { minX: puck.x, maxX: puck.x, minY: puck.y, maxY: puck.y };
+      }
+      return this.liveTick - puck.stillSince >= ticks(RULES.stuckTime);
+    }
+  }
+
+  /** @type {Record<Cue, [number, number, number, number, OscillatorType]>} */
+  const ARCADE_CUES = {
+    hit: [210, 72, 0.095, 0.18, 'triangle'],
+    unlock: [523, 659, 0.08, 0.11, 'square'],
+    shot: [920, 300, 0.11, 0.11, 'square'],
+    clang: [930, 410, 0.08, 0.095, 'triangle'],
+    serve: [880, 1320, 0.13, 0.14, 'square'],
+    goal: [523, 523, 0.14, 0.16, 'square'],
+    clash: [470, 115, 0.14, 0.13, 'triangle'],
+    warning: [740, 740, 0.075, 0.11, 'square'],
+    rail: [320, 170, 0.047, 0.065, 'triangle'],
+    ready: [392, 523, 0.09, 0.10, 'square'],
+    count: [440, 440, 0.10, 0.10, 'square'],
+    result: [392, 392, 0.15, 0.13, 'square'],
+    swing: [530, 180, 0.046, 0.045, 'triangle']
   };
-  const columns = WORD.length * 5 - 1;
-  const left = GAME_WIDTH / 2 - (columns * CELL) / 2 + CELL / 2;
-  const brickData = [];
-  for (let letter = 0; letter < WORD.length; letter++) {
-    const pixels = letters[WORD[letter]];
-    for (let row = 0; row < 7; row++) {
-      for (let col = 0; col < 4; col++) {
-        if (pixels[row][col] === '1') {
-          brickData.push([left + (letter * 5 + col) * CELL, 257 + row * 12, (letter + row + col) % 4]);
+  const MUSIC_STEP = 60 / 144 / 4;
+  // Eight bars in A minor. Melody uses eighth notes, with held notes marked by a dash.
+  const MUSIC = [
+    { bass: 45, chord: [57, 60, 64], lead: [76, 76, 79, 81, 79, 76, 72, -1] },
+    { bass: 41, chord: [53, 57, 60], lead: [72, 77, 76, 72, 69, 72, 74, -1] },
+    { bass: 48, chord: [55, 60, 64], lead: [76, 79, 84, 79, 76, 74, 72, 74] },
+    { bass: 43, chord: [55, 59, 62], lead: [74, 79, 77, 74, 71, 74, 76, -1] },
+    { bass: 45, chord: [57, 60, 64], lead: [81, 81, 84, 81, 79, 76, 79, -1] },
+    { bass: 41, chord: [53, 57, 60], lead: [77, 76, 72, 77, 81, 79, 76, -1] },
+    { bass: 50, chord: [57, 62, 65], lead: [77, 81, 86, 84, 81, 77, 74, 77] },
+    { bass: 40, chord: [56, 59, 64], lead: [76, 80, 83, 80, 76, 74, 71, 76] }
+  ];
+  const BASS_RHYTHM = [0, -1, 0, 12, -1, 0, -1, 7, 0, -1, 0, 12, -1, 7, 12, -1];
+  const noteHz = (/** @type {number} */ midi) => 440 * 2 ** ((midi - 69) / 12);
+
+  class ArenaSound {
+    constructor() {
+      /** @type {AudioContext | null} */
+      this.context = null;
+      /** @type {DynamicsCompressorNode | null} */
+      this.output = null;
+      /** @type {GainNode | null} */
+      this.music = null;
+      /** @type {AudioBuffer | null} */
+      this.noise = null;
+      this.step = 0;
+      this.nextBeat = 0;
+      this.duckUntil = 0;
+      this.musicLevel = -1;
+      this.resumePending = false;
+    }
+
+    unlock() {
+      if (typeof AudioContext === 'undefined') return;
+      try {
+        if (!this.context) {
+          const audio = new AudioContext();
+          this.context = audio;
+          this.output = audio.createDynamicsCompressor();
+          this.output.threshold.value = -17;
+          this.output.ratio.value = 5;
+          this.output.connect(audio.destination);
+          this.music = audio.createGain();
+          this.music.gain.value = 0;
+          this.music.connect(this.output);
+          this.noise = audio.createBuffer(1, Math.ceil(audio.sampleRate * 0.18), audio.sampleRate);
+          const samples = this.noise.getChannelData(0);
+          for (let i = 0; i < samples.length; i++) samples[i] = Math.random() * 2 - 1;
+        }
+        if (this.context.state !== 'running' && !this.resumePending) {
+          this.resumePending = true;
+          this.context.resume().catch(() => {}).finally(() => { this.resumePending = false; });
+        }
+      } catch {
+        // The match stays playable when the browser denies audio.
+      }
+    }
+
+    /** @param {Phase} phase @param {boolean} paused */
+    update(phase, paused) {
+      const audio = this.context;
+      const music = this.music;
+      if (audio?.state !== 'running' || !music) return;
+      const now = audio.currentTime;
+      const playing = !paused && phase !== 'result';
+      const level = !playing ? 0 : now < this.duckUntil ? 0.12 : phase === 'live' ? 0.57 : 0.32;
+      if (level !== this.musicLevel) {
+        music.gain.setTargetAtTime(level, now, level < this.musicLevel ? 0.018 : 0.075);
+        this.musicLevel = level;
+      }
+      if (!playing) {
+        this.nextBeat = 0;
+        return;
+      }
+      // Drop missed steps after long stalls instead of scheduling an audible burst.
+      if (this.nextBeat < now) this.nextBeat = now + 0.02;
+      while (this.nextBeat < now + 0.15) {
+        this.musicStep(audio, this.nextBeat, phase === 'live', music);
+        this.nextBeat += MUSIC_STEP;
+        this.step = (this.step + 1) % (MUSIC.length * 16);
+      }
+    }
+
+    /** @param {AudioContext} audio @param {number} at @param {boolean} live @param {GainNode} bus */
+    musicStep(audio, at, live, bus) {
+      const index = this.step % 16;
+      const bar = MUSIC[Math.floor(this.step / 16)];
+      const bass = BASS_RHYTHM[index];
+      if (bass >= 0) {
+        const hz = noteHz(bar.bass + bass);
+        this.note(audio, at, hz, hz, MUSIC_STEP * 1.5, 0.12, 'triangle', bus);
+      }
+      if (index % 2 === 0) {
+        const midi = bar.lead[index / 2];
+        if (midi >= 0) {
+          const hz = noteHz(midi);
+          const length = MUSIC_STEP * (bar.lead[index / 2 + 1] === -1 ? 3.3 : 1.45);
+          this.note(audio, at, hz, hz, length, 0.038, 'square', bus);
+        }
+      }
+      if (index % 4 === 2 || (live && index % 4 === 3)) {
+        const hz = noteHz(bar.chord[Math.floor(index / 2) % 3] + 12);
+        this.note(audio, at, hz, hz, MUSIC_STEP * 0.64, 0.035, 'triangle', bus);
+      }
+      if (index % 4 === 0 || (live && index === 10)) {
+        this.note(audio, at, 125, 47, 0.10, 0.16, 'sine', bus);
+      }
+      if (index % 8 === 4) this.burst(audio, at, 0.095, 0.105, 1300, bus);
+      if (index % 2 === 0 || (live && index >= 13)) {
+        this.burst(audio, at, 0.036, index % 4 === 2 ? 0.052 : 0.028, 6200, bus);
+      }
+    }
+
+    /** @param {Cue} cue */
+    play(cue) {
+      const audio = this.context;
+      if (audio?.state !== 'running') return;
+      const [from, to, length, volume, wave] = ARCADE_CUES[cue];
+      const now = audio.currentTime;
+      this.note(audio, now, from, to, length, volume, wave);
+      if (cue === 'hit' || cue === 'shot' || cue === 'clang' || cue === 'clash') {
+        this.burst(audio, now, 0.065, 0.15, cue === 'hit' ? 530 : 1600, this.output ?? audio.destination);
+        this.duckUntil = Math.max(this.duckUntil, now + 0.15);
+      }
+      const extra = cue === 'goal' ? [659, 784, 1047]
+        : cue === 'result' ? [523, 659, 784]
+        : cue === 'unlock' ? [784, 1047]
+        : cue === 'serve' ? [1320] : [];
+      extra.forEach((hz, index) => {
+        const start = now + (index + 1) * 0.078;
+        this.note(audio, start, hz, hz, index === extra.length - 1 ? 0.24 : 0.11, 0.105, 'square');
+      });
+      if (extra.length) this.duckUntil = Math.max(this.duckUntil, now + 0.34 + extra.length * 0.078);
+      else if (cue === 'warning' || cue === 'count') this.duckUntil = Math.max(this.duckUntil, now + 0.17);
+    }
+
+    /** @param {AudioContext} audio @param {number} at @param {number} duration
+     * @param {number} volume @param {number} frequency @param {AudioNode} output */
+    burst(audio, at, duration, volume, frequency, output) {
+      if (!this.noise) return;
+      const source = audio.createBufferSource();
+      source.buffer = this.noise;
+      const filter = audio.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = frequency;
+      filter.Q.value = 0.7;
+      const gain = audio.createGain();
+      gain.gain.setValueAtTime(volume, at);
+      gain.gain.exponentialRampToValueAtTime(0.001, at + duration);
+      source.connect(filter).connect(gain).connect(output);
+      source.onended = () => { source.disconnect(); filter.disconnect(); gain.disconnect(); };
+      source.start(at);
+      source.stop(at + duration);
+    }
+
+    /** @param {AudioContext} audio @param {number} now @param {number} from @param {number} to
+     * @param {number} length @param {number} volume @param {OscillatorType} type @param {AudioNode} [output] */
+    note(audio, now, from, to, length, volume, type, output = this.output ?? audio.destination) {
+      const voice = audio.createOscillator();
+      const gain = audio.createGain();
+      voice.type = type;
+      voice.frequency.setValueAtTime(from, now);
+      voice.frequency.exponentialRampToValueAtTime(to, now + length);
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(volume, now + 0.005);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + length);
+      voice.connect(gain).connect(output);
+      voice.onended = () => { voice.disconnect(); gain.disconnect(); };
+      voice.start(now);
+      voice.stop(now + length);
+    }
+
+    close() {
+      this.context?.close().catch(() => {});
+      this.context = null;
+      this.output = null;
+      this.music = null;
+      this.noise = null;
+      this.nextBeat = 0;
+      this.step = 0;
+      this.duckUntil = 0;
+      this.musicLevel = -1;
+      this.resumePending = false;
+    }
+  }
+
+  /** @param {Phaser.GameObjects.Graphics} g */
+  function drawRink(g) {
+    const { left, right, ceiling, floor, width, height } = RULES;
+    g.fillStyle(0x0b1220).fillRect(0, 0, width, height);
+    g.fillStyle(0x111f31).fillRect(0, 115, width, ceiling - 115);
+    for (let row = 0; row < 4; row++) {
+      const y = 147 + row * 19;
+      g.fillStyle(0x0d1726).fillRect(0, y + 12, width, 6);
+      for (let column = 0; column < 53; column++) {
+        const x = column * 16 + (row % 2) * 7;
+        const tone = (column * 13 + row * 7) % 11;
+        g.fillStyle(tone < 2 ? 0x35465c : 0x223247);
+        g.fillCircle(x, y, 2 + tone % 2).fillRect(x - 4, y + 3, 8, 5);
+      }
+    }
+    for (const side of [0, 1]) {
+      const x = side === 0 ? 78 : width - 78;
+      const direction = side === 0 ? 1 : -1;
+      g.fillStyle(0x8ba9c9, 0.08).fillTriangle(x - 24, 127, x + 24, 127, x + direction * 152, 223);
+      g.lineStyle(4, 0x42566f).lineBetween(x, 130, x + direction * 31, 223);
+      g.fillStyle(0x253751).fillRoundedRect(x - 31, 117, 62, 14, 3);
+      for (let lamp = -23; lamp <= 23; lamp += 15) g.fillStyle(0xaac9df).fillRect(x + lamp, 120, 11, 5);
+    }
+    g.fillStyle(0x090f1b).fillRoundedRect(left - 11, ceiling - 11, right - left + 22, floor - ceiling + 30, 11);
+    g.fillStyle(0x35465b).fillRect(left, ceiling - 6, right - left, 7);
+    const bands = [0x202e43, 0x223148, 0x24344c, 0x26364d, 0x273950, 0x293b52];
+    bands.forEach((color, index) => {
+      const y = ceiling + Math.floor((floor - ceiling) * index / bands.length);
+      const end = ceiling + Math.floor((floor - ceiling) * (index + 1) / bands.length);
+      g.fillStyle(color).fillRect(left, y, right - left, end - y);
+    });
+    g.lineStyle(1, 0x728ca6, 0.15);
+    for (let x = left + 87; x < right; x += 87) g.lineBetween(x, ceiling + 1, x, floor - 1);
+    g.lineStyle(2, 0x8ba9bd, 0.29);
+    g.lineBetween(CENTER_X, ceiling, CENTER_X, floor);
+    g.strokeCircle(CENTER_X, CENTER_Y, 49);
+    g.fillStyle(0x9db0c8, 0.44).fillCircle(CENTER_X, CENTER_Y, 3);
+    for (const [side, edge] of [left, right].entries()) {
+      const inward = side === 0 ? 1 : -1;
+      const x = Math.min(edge, edge + inward * 84);
+      g.fillStyle(TEAM[side], 0.055).fillRect(x, RULES.mouthTop, 84, RULES.mouthBottom - RULES.mouthTop);
+      g.lineStyle(2, TEAM[side], 0.22).strokeRect(x, RULES.mouthTop, 84, RULES.mouthBottom - RULES.mouthTop);
+      for (const y of [ceiling + 17, floor - 17]) {
+        g.lineStyle(2, TEAM[side], 0.42).lineBetween(edge + inward * 7, y, edge + inward * 41, y);
+      }
+    }
+    g.fillStyle(0x93a8bf).fillRect(left, floor, right - left, 2);
+    g.fillStyle(0x3b506a).fillRect(left, floor + 2, right - left, 6);
+    g.fillStyle(0x172538).fillRect(left, floor + 8, right - left, 7);
+    for (let x = left + 16; x < right; x += 28) g.fillStyle(0x526981).fillCircle(x, floor + 11, 1);
+    g.fillStyle(0x111c2d).fillRect(0, 528, width, height - 528);
+    g.lineStyle(1, 0x394e67).lineBetween(33, 528, 767, 528);
+  }
+
+  /** @param {Phaser.GameObjects.Graphics} g @param {Fighter} fighter
+   * @param {number} now @param {number} alpha @param {number} visualTime */
+  function drawFighter(g, fighter, now, alpha, visualTime) {
+    const x = Phaser.Math.Linear(fighter.oldX, fighter.x, alpha);
+    const y = Phaser.Math.Linear(fighter.oldY, fighter.y, alpha);
+    const color = TEAM[fighter.side];
+    const dark = fighter.side === 0 ? 0x237189 : 0xa84d37;
+    const face = fighter.face;
+    const age = fighter.swing ? now - fighter.swing.at : -1;
+    const active = age >= HIT_START && age < HIT_END;
+    const winding = age >= 0 && age < HIT_START;
+    const poseAge = Math.max(0, age - 1 + alpha);
+    const stunned = fighter.stunned && now < fighter.blockedUntil;
+    const protectedNow = now < fighter.protectedUntil && now >= fighter.blockedUntil;
+    const run = clamp(Math.abs(fighter.vx) / RULES.groundSpeed, 0, 1);
+    const stride = fighter.grounded ? Math.sin((now - 1 + alpha) / 6) * 8 * run : 0;
+    const idle = fighter.grounded && age < 0 && !stunned ? Math.sin(visualTime / 225 + fighter.side) * (1 - run) : 0;
+    const tuck = fighter.grounded ? 0 : clamp(4 - fighter.vy / 180, 1, 8);
+    const crouch = stunned ? 6 : winding ? 3 * poseAge / HIT_START : 0;
+    const top = y - 52 + crouch + idle;
+    const hitAge = ticks(fighter.stunned ? RULES.stun : RULES.recoil) - (fighter.blockedUntil - now);
+    const flash = now < fighter.blockedUntil ? 1 - clamp(hitAge / ticks(FEEL.hitFlash), 0, 1) : 0;
+
+    /** @param {number} tint @param {number[]} points */
+    const patch = (tint, points) => {
+      const vertices = [];
+      for (let i = 0; i < points.length; i += 2) vertices.push({ x: x + face * points[i], y: top + points[i + 1] });
+      g.fillStyle(tint).fillPoints(vertices, true);
+    };
+    g.fillStyle(0x080d17, 0.55 - tuck * 0.025).fillEllipse(x, RULES.floor - 1, 36 - tuck, 6);
+
+    if (active) {
+      const box = strikeBox(fighter);
+      const centerY = y - RULES.fighterHeight + RULES.strikeOffset;
+      const root = x + face * HALF_BODY;
+      const end = x + (face > 0 ? box.maxX : box.minX) - fighter.x;
+      g.fillStyle(color, 0.2).fillTriangle(root, centerY - 12, end, centerY, root, centerY + 12);
+      g.lineStyle(2, WHITE, 0.92).lineBetween(root + face * 5, centerY, end, centerY);
+      g.lineStyle(2, color, 0.8).lineBetween(root, centerY + 7, end - face * 10, centerY + 4);
+    }
+    if (protectedNow) {
+      g.lineStyle(2, color, 0.68).strokeRoundedRect(x - 18, y - 56, 36, 56, 7);
+      for (let stripe = 0; stripe < 3; stripe++) {
+        const py = y - 45 + stripe * 12;
+        g.lineBetween(x - 19, py, x - 13, py - 5);
+        g.lineBetween(x + 13, py, x + 19, py - 5);
+      }
+    }
+
+    const rear = y - tuck * 0.75 - Math.max(0, stride) * 0.45;
+    const front = y - tuck + Math.min(0, stride) * 0.45;
+    const backX = x - face * (7 + stride * 0.45);
+    const frontX = x + face * (7 - stride * 0.45);
+    g.lineStyle(8, 0x101725).lineBetween(x - face * 6, y - 19, backX, rear - 5);
+    g.lineStyle(6, dark).lineBetween(x - face * 6, y - 18, backX, rear - 6);
+    g.lineStyle(8, 0x101725).lineBetween(x + face * 5, y - 19, frontX, front - 4);
+    g.lineStyle(6, 0x4f6680).lineBetween(x + face * 5, y - 18, frontX, front - 5);
+    for (const [bootX, footY] of [[backX, rear], [frontX, front]]) {
+      g.fillStyle(0x090f1b).fillRoundedRect(bootX - 5 + face * 2, footY - 7, 11, 7, 2);
+      g.fillStyle(color).fillRect(bootX - 4 + face * 2, footY - 6, 9, 2);
+    }
+
+    patch(0x0a1120, [-13, 18, 10, 17, 15, 23, 10, 36, -10, 36, -16, 25]);
+    patch(flash > 0.32 ? WHITE : color, [-11, 19, 9, 19, 12, 23, 8, 33, -9, 33, -13, 25]);
+    patch(dark, [-13, 24, -7, 24, -3, 34, -10, 34]);
+    patch(WHITE, [1, 21, 9, 21, 8, 24, 0, 24]);
+    patch(0x111c2b, [-9, 34, 9, 34, 8, 37, -8, 37]);
+
+    if (fighter.side === 0) {
+      const flick = stride * 0.19 + tuck * 0.35;
+      patch(0x090f1b, [-6, 5, -14, 2, -20, 8 + flick, -22, 16 + flick, -14, 13 + flick, -8, 10]);
+      patch(color, [-8, 4, -13, 5, -13, 8, -8, 8]);
+    } else {
+      patch(0x090f1b, [-13, 10, -14, 3, -8, 4, -6, -2, -2, 2, 3, -2, 9, 5, 11, 12]);
+      patch(color, [-10, 4, -6, 0, -3, 4, 3, 0, 7, 6, -7, 7]);
+    }
+    patch(0x090f1b, [-10, 6, 6, 5, 12, 11, 10, 17, 4, 20, -8, 16]);
+    patch(fighter.side === 0 ? 0xf3bd91 : 0xbd805e, [-4, 8, 7, 8, 10, 12, 7, 17, 1, 17, -4, 14]);
+    patch(dark, [-9, 6, 6, 5, 9, 9, 2, 10, -8, 12]);
+    patch(0x101725, [4, 10, 9, 10, 9, 12, 4, 12]);
+    patch(WHITE, [6, 10, 9, 10, 8, 11, 6, 11]);
+
+    let reach = 13 + stride * 0.3;
+    if (winding) reach = Phaser.Math.Linear(13, 7, poseAge / HIT_START);
+    else if (active) reach = Phaser.Math.Linear(7, 34, clamp((poseAge - HIT_START + 1) / 3, 0, 1));
+    else if (age >= HIT_END) reach = Phaser.Math.Linear(34, 13, (poseAge - HIT_END + 1) / (SWING_END - HIT_END));
+    const gloveX = x + face * reach;
+    const gloveY = top + (active ? 20 : 25 - stride * 0.3);
+    g.lineStyle(7, 0x0a1120).lineBetween(x + face * 7, top + 23, gloveX, gloveY);
+    g.lineStyle(4, dark).lineBetween(x + face * 8, top + 23, gloveX, gloveY);
+    g.fillStyle(0x0a1120).fillRoundedRect(gloveX - 6, gloveY - 6, 12, 12, 3);
+    g.fillStyle(color).fillRoundedRect(gloveX - 4, gloveY - 4, 8, 8, 2);
+    g.fillStyle(WHITE).fillRect(gloveX - 3, gloveY - 3, 5, 2);
+    if (stunned) {
+      for (const offset of [-10, 7]) {
+        g.fillStyle(GOLD).fillTriangle(x + offset - 3, y - 61, x + offset + 4, y - 63, x + offset, y - 57);
+      }
+    }
+  }
+
+  /** @param {Phaser.Scene} scene @param {number} x @param {number} y @param {number} size
+   * @param {string} [color] */
+  function label(scene, x, y, size, color = '#f7faff') {
+    return scene.add.text(x, y, '', {
+      fontFamily: 'Arial, sans-serif', fontSize: size, color, fontStyle: 'bold',
+      align: 'center'
+    }).setOrigin(0.5);
+  }
+
+  /** @param {Phaser.GameObjects.Text} object @param {string} value */
+  function showText(object, value) {
+    if (object.text !== value) object.setText(value);
+  }
+
+  /** @param {Phaser.GameObjects.Graphics} g @param {number} x @param {number} y
+   * @param {number} width @param {number} height @param {number} accent */
+  function drawPlate(g, x, y, width, height, accent) {
+    const cut = 10;
+    const points = [
+      { x: x + cut, y }, { x: x + width, y }, { x: x + width, y: y + height - cut },
+      { x: x + width - cut, y: y + height }, { x, y: y + height }, { x, y: y + cut }
+    ];
+    g.fillStyle(0x101b2c, 0.98).fillPoints(points, true);
+    g.lineStyle(1, accent, 0.4).strokePoints(points, true);
+    g.lineStyle(3, accent, 0.9).lineBetween(x + cut, y, x + cut + Math.min(48, width / 3), y);
+  }
+
+  /** @typedef {MatchEvent & {duration: number, remaining: number}} Flash */
+
+  /** @param {Phaser.GameObjects.Graphics} g @param {Flash} flash */
+  function drawImpact(g, flash) {
+    const age = 1 - flash.remaining / flash.duration;
+    const color = flash.side < 0 ? WHITE : TEAM[flash.side];
+    const goal = flash.cue === 'goal';
+    const sparks = goal || flash.cue === 'hit' || flash.cue === 'shot' || flash.cue === 'clash';
+    const radius = 7 + age * (goal ? 52 : 22);
+    g.lineStyle(goal ? 3 : 2, color, (1 - age) * 0.8).strokeCircle(flash.x, flash.y, radius);
+    if (goal) {
+      const inward = flash.x < RULES.width / 2 ? 1 : -1;
+      for (let shard = 0; shard < 7; shard++) {
+        const x = flash.x + inward * (10 + age * (39 + shard * 8));
+        const y = flash.y + (shard - 3) * (4 + age * 11);
+        const size = (1 - age) * (shard % 2 ? 4 : 6);
+        g.fillStyle(shard % 2 ? WHITE : color, (1 - age) * 0.85)
+          .fillTriangle(x + inward * size * 2, y, x, y - size / 2, x, y + size / 2);
+      }
+    }
+    if (sparks) {
+      g.lineStyle(2, age < 0.23 ? WHITE : color, (1 - age) * 0.95);
+      for (let ray = 0; ray < 5; ray++) {
+        const angle = ray * Math.PI * 2 / 5;
+        const dx = Math.cos(angle);
+        const dy = Math.sin(angle);
+        const start = radius + 3;
+        const end = start + (1 - age) * (goal ? 15 : 9);
+        g.lineBetween(flash.x + dx * start, flash.y + dy * start, flash.x + dx * end, flash.y + dy * end);
+      }
+    }
+  }
+
+  class HockeyScene extends Phaser.Scene {
+    constructor() {
+      super('hockey');
+      this.match = new Match();
+      this.cabinet = new CabinetInput();
+      this.audioCues = new ArenaSound();
+      /** @type {Flash[]} */
+      this.flashes = [];
+      /** @type {ReturnType<HockeyScene['createView']> | null} */
+      this.view = null;
+      this.accumulator = 0;
+      this.suspended = false;
+      this.resumeFor = 0;
+      this.visualTime = 0;
+    }
+
+    createView() {
+      const rinkKey = 'lorca-rink';
+      if (!this.textures.exists(rinkKey)) {
+        const art = this.make.graphics({ x: 0, y: 0 });
+        drawRink(art);
+        art.generateTexture(rinkKey, RULES.width, RULES.height);
+        art.destroy();
+      }
+      const rink = this.add.image(0, 0, rinkKey).setOrigin(0);
+      const actors = this.add.graphics();
+      const meters = this.add.graphics();
+      const scores = [label(this, 273, 57, 56, '#56dfff'), label(this, 527, 57, 56, '#ff9658')];
+      const clock = label(this, 400, 54, 34);
+      const mode = label(this, 400, 87, 15, '#b5c9e0');
+      const stations = [
+        label(this, 130, 52, 18, '#56dfff').setText('JUGADOR 1'),
+        label(this, 670, 52, 18, '#ff9658').setText('JUGADOR 2')
+      ];
+      const status = [label(this, 130, 99, 13, '#ffe26a'), label(this, 670, 99, 13, '#ffe26a')];
+      const gateText = [label(this, 115, 200, 18), label(this, 685, 200, 18)];
+      const markers = [
+        label(this, 0, 0, 13, '#56dfff').setText('J1').setStroke('#101725', 4),
+        label(this, 0, 0, 13, '#ff9658').setText('J2').setStroke('#101725', 4)
+      ];
+      const guide = label(this, 400, 144, 19);
+      const controls = [
+        label(this, 207, 550, 16, '#56dfff').setText('J1   A/D mover  ·  W saltar  ·  E pegar'),
+        label(this, 593, 550, 16, '#ff9658').setText('J2   ←/→ mover  ·  ↑ saltar  ·  Shift der. pegar')
+      ];
+      const cabinetHint = label(this, 400, 575, 16, '#b5c9e0')
+        .setText('Arcade: palanca para mover y saltar · botón 1 para pegar');
+      const panel = this.add.graphics();
+      const headline = label(this, 400, 0, 40);
+      headline.setFontFamily('Arial Black, Arial, sans-serif').setFontStyle('bold italic');
+      const detail = label(this, 400, 0, 18, '#d2e2f5');
+      const titleStations = [
+        label(this, 224, 249, 22, '#56dfff').setText('J1 · CELESTE'),
+        label(this, 576, 249, 22, '#ff9658').setText('J2 · NARANJA')
+      ];
+      const titleControls = [
+        label(this, 224, 320, 19).setText('Palanca ← →   Mover (A/D)\nPalanca ↑   Saltar (W)\nBotón 1   Pegar (E)').setLineSpacing(8),
+        label(this, 576, 320, 19).setText('Palanca ← →   Mover (←/→)\nPalanca ↑   Saltar (↑)\nBotón 1   Pegar (Shift der.)').setLineSpacing(8)
+      ];
+      const joinLabels = [label(this, 224, 405, 20, '#56dfff'), label(this, 576, 405, 20, '#ff9658')];
+      const joinHint = label(this, 400, 549, 18, '#d2e2f5');
+      return { rink, actors, meters, scores, clock, mode, stations, status, gateText, markers, guide, controls, cabinetHint,
+        panel, headline, detail, titleStations, titleControls, joinLabels, joinHint };
+    }
+
+    create() {
+      this.match = new Match();
+      this.view = this.createView();
+
+      /** @param {KeyboardEvent} event */
+      const press = (event) => {
+        if (document.hidden || !this.cabinet.lookup.has(cabinetKey(event))) return;
+        if (this.suspended) {
+          if (event.repeat) return;
+          focus();
+        }
+        this.cabinet.keydown(event);
+        if (!event.repeat) this.audioCues.unlock();
+      };
+      const blur = () => {
+        this.suspended = true;
+        this.accumulator = 0;
+        this.cabinet.clear();
+        this.audioCues.update(this.match.phase, true);
+      };
+      const focus = () => {
+        if (!this.suspended || document.hidden) return;
+        this.suspended = false;
+        this.accumulator = 0;
+        this.cabinet.clear();
+        if (this.match.phase === 'live' || this.match.phase === 'repair') this.resumeFor = RULES.resume * 1000;
+      };
+      const visibility = () => { if (document.hidden) blur(); else if (document.hasFocus()) focus(); };
+      const canvas = this.game.canvas;
+      canvas.tabIndex = 0;
+      const focusCanvas = () => { canvas.focus({ preventScroll: true }); focus(); };
+      canvas.addEventListener('pointerdown', focusCanvas);
+      window.addEventListener('keydown', press);
+      window.addEventListener('keyup', this.cabinet.keyup);
+      window.addEventListener('blur', blur);
+      window.addEventListener('focus', focus);
+      document.addEventListener('visibilitychange', visibility);
+      this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+        window.removeEventListener('keydown', press);
+        window.removeEventListener('keyup', this.cabinet.keyup);
+        window.removeEventListener('blur', blur);
+        window.removeEventListener('focus', focus);
+        document.removeEventListener('visibilitychange', visibility);
+        canvas.removeEventListener('pointerdown', focusCanvas);
+        this.cabinet.clear();
+        this.audioCues.close();
+        this.suspended = false;
+        this.resumeFor = 0;
+        this.accumulator = 0;
+        this.flashes.length = 0;
+        this.view = null;
+      });
+    }
+
+    /** @param {number} time @param {number} delta */
+    update(time, delta) {
+      const safeDelta = clamp(delta, 0, TICK_CAP * STEP_MS);
+      if (!this.suspended) this.visualTime += safeDelta;
+      if (!this.suspended && this.resumeFor > 0) {
+        this.resumeFor = Math.max(0, this.resumeFor - safeDelta);
+        this.cabinet.edges.clear();
+      } else if (!this.suspended) {
+        this.accumulator += safeDelta;
+        for (let step = 0; step < TICK_CAP && this.accumulator + EPSILON >= STEP_MS; step++) {
+          this.match.step(this.cabinet.take());
+          this.accumulator = Math.max(0, this.accumulator - STEP_MS);
+        }
+      }
+
+      for (const flash of this.flashes) flash.remaining -= safeDelta;
+      this.flashes = this.flashes.filter(flash => flash.remaining > 0);
+      for (const event of this.match.events) {
+        this.audioCues.play(event.cue);
+        if (event.cue === 'hit' || event.cue === 'unlock' || event.cue === 'shot'
+            || event.cue === 'goal' || event.cue === 'clash' || event.cue === 'clang') {
+          if (this.flashes.length >= FEEL.maxFlashes) this.flashes.shift();
+          const duration = event.cue === 'goal' ? FEEL.goalMs : FEEL.impactMs;
+          this.flashes.push({ ...event, duration, remaining: duration });
+        }
+      }
+      this.match.events.length = 0;
+      this.audioCues.update(this.match.phase, this.suspended || this.resumeFor > 0);
+      const alpha = this.match.phase === 'live' && !this.suspended && !this.resumeFor
+        ? clamp(this.accumulator / STEP_MS, 0, 1) : 1;
+      this.renderMatch(alpha);
+    }
+
+    /** @param {number} alpha */
+    renderMatch(alpha) {
+      const view = this.view;
+      if (!view) return;
+      const match = this.match;
+      const g = view.actors.clear();
+      const meters = view.meters.clear();
+      const isTitle = match.phase === 'title';
+      if (!isTitle) {
+        drawPlate(meters, 29, 17, 282, 98, TEAM[0]);
+        drawPlate(meters, 489, 17, 282, 98, TEAM[1]);
+        drawPlate(meters, 327, 17, 146, 98, match.overtime ? GOLD : 0x87a0be);
+      }
+      let shakeX = 0;
+      let shakeY = 0;
+      let shakeStrength = 0;
+      if (!isTitle && !this.suspended) {
+        for (const flash of this.flashes) {
+          const intensity = flash.cue === 'goal' ? FEEL.goalShake : flash.cue === 'hit' ? FEEL.hitShake : 0;
+          const elapsed = flash.duration - flash.remaining;
+          const strength = intensity * Math.max(0, 1 - elapsed / FEEL.shakeMs);
+          if (strength <= shakeStrength) continue;
+          shakeStrength = strength;
+          shakeX = Math.round(strength * Math.cos(elapsed * 0.15) * (flash.side === 0 ? 1 : -1));
+          shakeY = Math.round(strength * 0.5 * Math.sin(elapsed * 0.16));
+        }
+      }
+      view.rink.setPosition(shakeX, shakeY);
+      view.actors.setPosition(shakeX, shakeY);
+      const seconds = Math.ceil(match.clock / RULES.hz);
+      showText(view.clock.setVisible(!isTitle), Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0'));
+      showText(view.mode.setVisible(!isTitle), match.overtime ? 'GOL DE ORO' : 'PRIMERO A 3');
+      this.renderGuide(view);
+      if (!isTitle && view.guide.text) {
+        const width = Math.max(220, view.guide.width + 32);
+        const x = RULES.width / 2 - width / 2;
+        meters.fillStyle(0x101b2c, 0.96).fillRoundedRect(x, 131, width, 30, 4);
+        meters.lineStyle(1, 0x52718d, 0.65).strokeRoundedRect(x, 131, width, 30, 4);
+      }
+
+      for (const [side, gate] of match.gates.entries()) {
+        const fighter = match.fighters[side];
+        const edge = side === 0 ? RULES.left : RULES.right;
+        const color = TEAM[side];
+        const goalTime = gate.until - match.liveTick;
+        const open = goalTime > 0 && !isTitle;
+        const depth = RULES.goalDepth;
+        const x = side === 0 ? edge - depth : edge;
+        const goalHeight = RULES.mouthBottom - RULES.mouthTop;
+        g.fillStyle(INK).fillRect(x, RULES.mouthTop, depth, goalHeight);
+        g.fillStyle(color, open ? 0.28 : 0.14).fillRect(x, RULES.mouthTop, depth, goalHeight);
+        g.lineStyle(1, color, 0.28);
+        for (let y = RULES.mouthTop + 7; y < RULES.mouthBottom; y += 8) g.lineBetween(x, y, x + depth, y);
+        for (let net = 6; net < depth; net += 6) {
+          g.lineBetween(x + net, RULES.mouthTop + 1, x + net, RULES.mouthBottom - 1);
+        }
+        g.fillStyle(0x101725).fillRect(x - 2, RULES.mouthTop - 3, depth + 4, 3);
+        g.fillStyle(color, 0.84).fillRect(x - 2, RULES.mouthTop - 1, depth + 4, 3);
+        g.lineStyle(3, color).lineBetween(edge, RULES.ceiling, edge, RULES.mouthTop);
+        g.lineBetween(edge, RULES.mouthBottom, edge, RULES.floor);
+        g.strokeRect(x, RULES.mouthTop, depth, goalHeight);
+        const shutter = open ? clamp((ticks(RULES.open) - goalTime) / ticks(FEEL.shutter), 0, 1) : 0;
+        if (shutter < 1) {
+          const offset = (side === 0 ? -1 : 1) * depth * shutter;
+          g.lineStyle(3, color, 0.72 * (1 - shutter));
+          for (let y = RULES.mouthTop + 5; y < RULES.mouthBottom - 4; y += 11) {
+            g.lineBetween(x + offset, y, x + depth - 1 + offset, y + 5);
+          }
+        }
+        const gateColor = open && goalTime <= RULES.hz ? '#ffe26a' : open ? '#f7faff' : '#a9bdd5';
+        view.gateText[side].setVisible(!isTitle).setColor(gateColor);
+        const gateLabel = 'ARCO J' + (side + 1);
+        showText(view.gateText[side], gateLabel + (open ? ' ABIERTO · ' + Math.ceil(goalTime / RULES.hz) + ' s' : ' CERRADO'));
+        const goalPulse = this.flashes.find(flash => flash.cue === 'goal' && flash.side === side);
+        view.scores[side].setScale(goalPulse && match.phase === 'goal' ? 1 + 0.17 * goalPulse.remaining / goalPulse.duration : 1);
+        showText(view.scores[side].setVisible(!isTitle), String(match.score[side]));
+        view.stations[side].setVisible(!isTitle);
+        const blocked = match.liveTick < fighter.blockedUntil;
+        const stunned = fighter.stunned && blocked;
+        const protectedNow = !blocked && match.liveTick < fighter.protectedUntil;
+        showText(view.status[side].setVisible(!isTitle), stunned ? 'ATURDIDO'
+          : blocked ? 'IMPACTO' : protectedNow ? 'PROTEGIDO' : fighter.swing ? 'GOLPE' : '');
+        if (!isTitle) {
+          for (let pip = 0; pip < 3; pip++) {
+            meters.fillStyle(pip < fighter.pips ? color : 0x33445a).fillRoundedRect(105 + side * 540 + pip * 18, 70, 14, 5, 2);
+          }
+          if (stunned) {
+            const fraction = (fighter.blockedUntil - match.liveTick) / ticks(RULES.stun);
+            meters.fillStyle(GOLD).fillRect(104 + side * 540, 113, 52 * fraction, 3);
+          }
+          if (open) {
+            const barX = side === 0 ? 48 : 618;
+            meters.fillStyle(0x33445a).fillRect(barX, 214, 134, 3);
+            meters.fillStyle(goalTime <= RULES.hz ? GOLD : color)
+              .fillRect(barX, 214, 134 * goalTime / ticks(RULES.open), 3);
+          }
+        }
+
+        drawFighter(g, fighter, match.liveTick, alpha, this.visualTime);
+        view.markers[side].setVisible(!isTitle).setPosition(
+          Phaser.Math.Linear(fighter.oldX, fighter.x, alpha) + shakeX,
+          Phaser.Math.Linear(fighter.oldY, fighter.y, alpha) - 67 + shakeY
+        );
+      }
+
+      const puck = match.puck;
+      const x = Phaser.Math.Linear(puck.oldX, puck.x, alpha);
+      const y = Phaser.Math.Linear(puck.oldY, puck.y, alpha);
+      if (puck.powerUntil > match.liveTick) {
+        const fade = (puck.powerUntil - match.liveTick) / ticks(FEEL.trail);
+        const speed = Math.hypot(puck.vx, puck.vy) || 1;
+        const sx = -puck.vy / speed * 6;
+        const sy = puck.vx / speed * 6;
+        const tailX = x - puck.vx * 0.10;
+        const tailY = y - puck.vy * 0.10;
+        g.fillStyle(0xa2d1f2, fade * 0.38).fillTriangle(x + sx, y + sy, x - sx, y - sy, tailX, tailY);
+        g.lineStyle(2, WHITE, fade * 0.72).lineBetween(x, y, tailX, tailY);
+      }
+      for (const flash of this.flashes) drawImpact(g, flash);
+      g.fillStyle(INK).fillCircle(x, y, RADIUS + 2);
+      g.fillStyle(0x7796b3).fillCircle(x, y, RADIUS);
+      g.fillStyle(WHITE).fillEllipse(x, y - 2, RADIUS * 1.76, RADIUS * 1.46);
+      g.fillStyle(0xc1d4e8).fillEllipse(x + 1, y - 2, RADIUS, RADIUS * 0.7);
+      if (match.phase === 'faceoff') {
+        const angle = radians(RULES.serveAngle);
+        const dx = Math.cos(angle) * match.serveDirection;
+        const dy = Math.sin(angle);
+        const tipX = x + dx * 49;
+        const tipY = y + dy * 49;
+        const baseX = tipX - dx * 10;
+        const baseY = tipY - dy * 10;
+        g.lineStyle(3, WHITE).lineBetween(x + dx * 20, y + dy * 20, tipX, tipY);
+        g.fillStyle(WHITE).fillTriangle(tipX, tipY, baseX - dy * 6, baseY + dx * 6, baseX + dy * 6, baseY - dx * 6);
+      }
+
+      this.renderOverlay(view);
+    }
+
+    /** @param {ReturnType<HockeyScene['createView']>} view */
+    renderGuide(view) {
+      const match = this.match;
+      const title = match.phase === 'title';
+      const joining = title && !this.suspended;
+      const leftOpen = match.gateOpen(0);
+      const rightOpen = match.gateOpen(1);
+      let message = '';
+      let color = '#f7faff';
+      if (joining) {
+        message = 'Primero a 3 goles · 90 segundos';
+      } else if (match.phase === 'live' && !this.suspended && !this.resumeFor) {
+        if (leftOpen && rightOpen) {
+          message = 'AMBOS ARCOS ABIERTOS · Remata el disco al arco rival';
+        } else if (leftOpen || rightOpen) {
+          message = leftOpen ? 'J2 · Remata hacia el arco izquierdo' : 'J1 · Remata hacia el arco derecho';
+          color = leftOpen ? '#ff9658' : '#56dfff';
+        } else {
+          message = 'ARCOS CERRADOS · Acércate al rival y pégale de frente';
+        }
+      }
+      showText(view.guide.setY(joining ? 163 : 146).setColor(color), message);
+      for (let side = 0; side < 2; side++) {
+        view.controls[side].setVisible(!title);
+        view.titleStations[side].setVisible(joining);
+        view.titleControls[side].setVisible(joining);
+        view.joinLabels[side].setVisible(joining);
+        showText(view.joinLabels[side], match.ready[side] ? 'LISTO' : side === 0 ? 'START J1 (ENTER)' : 'START J2 (2)');
+      }
+      showText(view.joinHint.setVisible(joining), match.ready[0] ? 'Falta J2 · START J2 (2)'
+        : match.ready[1] ? 'Falta J1 · START J1 (Enter)'
+        : 'Dos jugadores · Pulsen ambos START');
+    }
+
+    /** @param {ReturnType<HockeyScene['createView']>} view */
+    renderOverlay(view) {
+      const match = this.match;
+      view.panel.clear();
+      let headline = '';
+      let detail = '';
+      let y = 294;
+      let titleSize = 42;
+      let color = '#f7faff';
+      let accent = 0x829dbb;
+
+      if (match.phase === 'title') {
+        headline = 'LORCA HOCKEY';
+        detail = 'Pega al rival, abre su arco por 6 s y remata el disco.';
+        titleSize = 58;
+        y = 60;
+      } else if (match.phase === 'faceoff') {
+        headline = String(Math.ceil((match.faceoffDuration - match.phaseAge) / RULES.hz));
+        detail = match.overtime ? 'Gol de oro · espera el saque' : 'Espera el saque';
+      } else if (match.phase === 'goal') {
+        headline = '¡GOL J' + (match.scorer + 1) + '!';
+        color = match.scorer === 0 ? '#56dfff' : '#ff9658';
+        accent = TEAM[match.scorer];
+      } else if (match.phase === 'repair') {
+        headline = 'NUEVO SAQUE';
+      } else if (match.phase === 'result') {
+        headline = match.winner === -1 ? 'EMPATE' : 'GANA J' + (match.winner + 1);
+        color = match.winner === -1 ? '#f7faff' : match.winner === 0 ? '#56dfff' : '#ff9658';
+        accent = match.winner === -1 ? 0xb0c4dd : TEAM[match.winner];
+        detail = match.phaseAge < ticks(RULES.resultLock)
+          ? match.score.join('  –  ')
+          : 'Revancha: ambos START (Enter y 2)';
+        y = 326;
+      }
+      if (this.suspended || this.resumeFor > 0) {
+        headline = this.suspended ? 'PARTIDA EN ESPERA' : 'REANUDANDO';
+        detail = this.suspended ? 'Vuelve al juego y pulsa un control' : '';
+        titleSize = 34;
+        y = 294;
+        color = '#f7faff';
+      }
+
+      if (match.phase !== 'title' && !this.suspended && !this.resumeFor) {
+        const entry = 1 - clamp(match.phaseAge / ticks(0.16), 0, 1);
+        y += entry * entry * 8;
+      }
+      view.headline.setVisible(Boolean(headline)).setY(y).setColor(color).setFontSize(titleSize);
+      view.detail.setVisible(Boolean(detail)).setY(y + (titleSize > 50 ? 48 : 36));
+      showText(view.headline, headline);
+      showText(view.detail, detail);
+      if (headline) {
+        const title = titleSize > 50;
+        const width = title ? 676 : 410;
+        drawPlate(view.panel, 400 - width / 2, y - 35, width, title ? 107 : detail ? 92 : 70, accent);
+        if (title) {
+          view.panel.lineStyle(3, TEAM[0]).lineBetween(77, y + 27, 386, y + 27);
+          view.panel.lineStyle(3, TEAM[1]).lineBetween(414, y + 27, 723, y + 27);
+        }
+      }
+      if (match.phase === 'title' && !this.suspended) {
+        for (let side = 0; side < 2; side++) {
+          const x = 60 + 352 * side;
+          drawPlate(view.panel, x, 220, 328, 216, TEAM[side]);
+          view.panel.lineStyle(1, TEAM[side], 0.4).lineBetween(x + 28, 270, x + 300, 270);
+          view.panel.fillStyle(TEAM[side], match.ready[side] ? 0.25 : 0.12).fillRoundedRect(x + 27, 384, 274, 43, 5);
         }
       }
     }
   }
 
-  const colors = [COLORS.brickA, COLORS.brickB, COLORS.brickC, COLORS.brickD];
-
-  for (const [bx, by, ci] of brickData) {
-    const brick = scene.add.rectangle(bx, by, CELL - 2, 10, colors[ci], 1);
-    brick.setStrokeStyle(1, COLORS.cell, 0.7);
-    scene.physics.add.existing(brick, true);
-    scene.playfield.bricks.add(brick);
-  }
-
-  scene.state.remainingBricks = scene.playfield.bricks.countActive(true);
-}
-
-function resetBalls(scene) {
-  const [topBall, bottomBall] = scene.playfield.balls;
-
-  topBall.setPosition(GAME_WIDTH / 2 - 110, 170);
-  bottomBall.setPosition(GAME_WIDTH / 2 + 110, GAME_HEIGHT - 170);
-
-  topBall.lastTouchedBy = 'p1';
-  bottomBall.lastTouchedBy = 'p2';
-  topBall.ghostFor = { p1: false, p2: false };
-  bottomBall.ghostFor = { p1: false, p2: false };
-  topBall.previousY = topBall.y;
-  bottomBall.previousY = bottomBall.y;
-  topBall.setAlpha(1);
-  bottomBall.setAlpha(1);
-
-  topBall.body.setVelocity(190, 210);
-  bottomBall.body.setVelocity(-190, -210);
-}
-
-function updatePaddles(scene, delta, time) {
-  const paddleSpeed = 320;
-  const dashSpeed = 1500;
-  const dashDuration = 110;
-  const dashCooldown = 750;
-  const p1Body = scene.playfield.p1Paddle.body;
-  const p2Body = scene.playfield.p2Paddle.body;
-  const deltaSeconds = delta / 1000;
-
-  let p1Dir = 0;
-  if (isControlHeld(scene, 'P1_L')) p1Dir -= 1;
-  if (isControlHeld(scene, 'P1_R')) p1Dir += 1;
-
-  let p2Dir = 0;
-  if (isControlHeld(scene, 'P2_L')) p2Dir -= 1;
-  if (isControlHeld(scene, 'P2_R')) p2Dir += 1;
-
-  tryStartDash(scene, 'p1', 'P1_1', p1Dir, time, dashDuration, dashCooldown);
-  tryStartDash(scene, 'p2', 'P2_1', p2Dir, time, dashDuration, dashCooldown);
-
-  let p1Velocity = p1Dir * paddleSpeed;
-  let p2Velocity = p2Dir * paddleSpeed;
-
-  if (time < scene.state.dash.p1.activeUntil) {
-    p1Velocity = scene.state.dash.p1.dir * dashSpeed;
-  }
-  if (time < scene.state.dash.p2.activeUntil) {
-    p2Velocity = scene.state.dash.p2.dir * dashSpeed;
-  }
-
-  p1Body.setVelocityX(0);
-  p2Body.setVelocityX(0);
-
-  scene.playfield.p1Paddle.setX(
-    Phaser.Math.Clamp(
-      scene.playfield.p1Paddle.x + p1Velocity * deltaSeconds,
-      110,
-      GAME_WIDTH - 110,
-    ),
-  );
-  scene.playfield.p2Paddle.setX(
-    Phaser.Math.Clamp(
-      scene.playfield.p2Paddle.x + p2Velocity * deltaSeconds,
-      110,
-      GAME_WIDTH - 110,
-    ),
-  );
-
-  if (typeof p1Body.updateFromGameObject === 'function') {
-    p1Body.updateFromGameObject();
-  }
-  if (typeof p2Body.updateFromGameObject === 'function') {
-    p2Body.updateFromGameObject();
-  }
-}
-
-function tryStartDash(scene, playerKey, buttonCode, dir, time, duration, cooldown) {
-  if (!scene.controls.pressed[buttonCode]) return;
-  scene.controls.pressed[buttonCode] = false;
-  if (dir === 0) return;
-  const dashState = scene.state.dash[playerKey];
-  if (time < dashState.cooldownUntil) return;
-  dashState.dir = dir;
-  dashState.activeUntil = time + duration;
-  dashState.cooldownUntil = time + cooldown;
-  playSound(scene, 'dash');
-  spawnDashTrail(scene, playerKey, dir);
-}
-
-function spawnDashTrail(scene, playerKey, dir) {
-  const paddle =
-    playerKey === 'p1' ? scene.playfield.p1Paddle : scene.playfield.p2Paddle;
-  const color = playerKey === 'p1' ? COLORS.p1 : COLORS.p2;
-  const trail = scene.add.rectangle(paddle.x, paddle.y, paddle.width, paddle.height, color, 0.6);
-  scene.tweens.add({
-    targets: trail,
-    x: paddle.x - dir * 50,
-    alpha: 0,
-    scaleX: 0.4,
-    duration: 260,
-    onComplete: () => trail.destroy(),
+  new Phaser.Game({
+    type: Phaser.AUTO, parent: 'game-root', width: RULES.width, height: RULES.height,
+    backgroundColor: '#101725',
+    scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+    // The fixed-step loop already caps catch-up. Phaser smoothing shortens slow frames.
+    fps: { smoothStep: false },
+    audio: { noAudio: true },
+    scene: HockeyScene
   });
-}
-
-function updateBallGhostStates(scene) {
-  const topLine = scene.playfield.p1Paddle.y;
-  const bottomLine = scene.playfield.p2Paddle.y;
-
-  for (const ball of scene.playfield.balls) {
-    const previousY = typeof ball.previousY === 'number' ? ball.previousY : ball.y;
-    const currentY = ball.y;
-
-    if (!ball.ghostFor.p1 && previousY >= topLine && currentY < topLine) {
-      ball.ghostFor.p1 = true;
-      animatePenaltyCounter(scene, 'p1');
-      playSound(scene, 'penalty');
-    } else if (ball.ghostFor.p1 && previousY <= topLine && currentY > topLine) {
-      ball.ghostFor.p1 = false;
-    }
-
-    if (!ball.ghostFor.p2 && previousY <= bottomLine && currentY > bottomLine) {
-      ball.ghostFor.p2 = true;
-      animatePenaltyCounter(scene, 'p2');
-      playSound(scene, 'penalty');
-    } else if (
-      ball.ghostFor.p2 &&
-      previousY >= bottomLine &&
-      currentY < bottomLine
-    ) {
-      ball.ghostFor.p2 = false;
-    }
-
-    ball.setAlpha(ball.ghostFor.p1 || ball.ghostFor.p2 ? 0.45 : 1);
-    ball.previousY = currentY;
-  }
-}
-
-function checkBallEscape(scene) {
-  for (const ball of scene.playfield.balls) {
-    const escaped =
-      !isFinite(ball.x) || !isFinite(ball.y) ||
-      ball.x < 10 || ball.x > GAME_WIDTH - 10 ||
-      ball.y < 10 || ball.y > GAME_HEIGHT - 10;
-    if (!escaped) {
-      continue;
-    }
-    // Ball slipped out — respawn it near centre heading toward the field
-    const vy = ball.lastTouchedBy === 'p1' ? 220 : -220;
-    const vx = Phaser.Math.Between(-160, 160);
-    ball.setPosition(GAME_WIDTH / 2, GAME_HEIGHT / 2);
-    ball.ghostFor = { p1: false, p2: false };
-    ball.previousY = GAME_HEIGHT / 2;
-    ball.setAlpha(1);
-    ball.body.setVelocity(vx, vy);
-  }
-}
-
-function canBallCollideWithPaddle(ball, playerKey) {
-  return ball.active && !ball.ghostFor?.[playerKey];
-}
-
-function updateBallTrails(scene, time) {
-  if (time % 3 > 1) {
-    return;
-  }
-
-  for (const ball of scene.playfield.balls) {
-    const trail = scene.add.circle(ball.x, ball.y, 4, ball.glowColor, 0.2);
-    scene.playfield.ballTrails.add(trail);
-
-    scene.tweens.add({
-      targets: trail,
-      alpha: 0,
-      scaleX: 0.2,
-      scaleY: 0.2,
-      duration: 250,
-      onComplete: () => trail.destroy(),
-    });
-  }
-}
-
-function handleBallPaddleCollision(scene, ball, paddle, playerKey) {
-  ball.lastTouchedBy = playerKey;
-  const ballColor = playerKey === 'p1' ? COLORS.p1 : COLORS.p2;
-  ball.setFillStyle(ballColor);
-  ball.glowColor = ballColor;
-
-  const offset = (ball.x - paddle.x) / (paddle.width / 2);
-  const currentSpeed = Math.min(ball.body.velocity.length() + 8, 330);
-  const horizontalVelocity = Phaser.Math.Clamp(offset * 220, -220, 220);
-  const verticalDirection = paddle === scene.playfield.p1Paddle ? 1 : -1;
-  const verticalVelocity = Math.max(120, Math.sqrt(currentSpeed * currentSpeed - horizontalVelocity * horizontalVelocity));
-
-  ball.body.setVelocity(horizontalVelocity, verticalVelocity * verticalDirection);
-}
-
-function handleBallBrickCollision(scene, ball, brick) {
-  if (!brick.active) {
-    return;
-  }
-
-  const brickX = brick.x;
-  const brickY = brick.y;
-  const brickHalfWidth = brick.width / 2;
-  const brickHalfHeight = brick.height / 2;
-  const deltaX = ball.x - brickX;
-  const deltaY = ball.y - brickY;
-  const normalizedX = Math.abs(deltaX) / Math.max(brickHalfWidth, 1);
-  const normalizedY = Math.abs(deltaY) / Math.max(brickHalfHeight, 1);
-  const speedX = Math.abs(ball.body.velocity.x);
-  const speedY = Math.abs(ball.body.velocity.y);
-
-  if (normalizedX > normalizedY) {
-    ball.body.setVelocityX((deltaX >= 0 ? 1 : -1) * Math.max(speedX, 150));
-    ball.setX(
-      brickX +
-        (deltaX >= 0 ? 1 : -1) * (brickHalfWidth + ball.width / 2 + 1),
-    );
-  } else {
-    ball.body.setVelocityY((deltaY >= 0 ? 1 : -1) * Math.max(speedY, 150));
-    ball.setY(
-      brickY +
-        (deltaY >= 0 ? 1 : -1) * (brickHalfHeight + ball.height / 2 + 1),
-    );
-  }
-
-  if (typeof ball.body.updateFromGameObject === 'function') {
-    ball.body.updateFromGameObject();
-  }
-
-  if (brick.body) {
-    brick.body.enable = false;
-  }
-  scene.playfield.bricks.remove(brick);
-  brick.destroy();
-  scene.state.remainingBricks -= 1;
-
-  if (ball.lastTouchedBy === 'p1') {
-    scene.state.scores.p1 += 1;
-  } else if (ball.lastTouchedBy === 'p2') {
-    scene.state.scores.p2 += 1;
-  }
-
-  spawnBrickBurst(scene, brick.x, brick.y, brick.fillColor);
-  playSound(scene, 'brick');
-  refreshHud(scene);
-  maybeFinishMatch(scene);
-}
-
-function startAmbientMusic(scene) {
-  if (scene.state.musicStarted) {
-    return;
-  }
-  scene.state.musicStarted = true;
-
-  try {
-    const ctx = scene.sound.context;
-    if (!ctx) {
-      return;
-    }
-
-    // Master output
-    const out = ctx.createGain();
-    out.gain.value = 0.18;
-    out.connect(ctx.destination);
-
-    // Feedback delay for space/depth
-    const dly  = ctx.createDelay(2);
-    const dlFb = ctx.createGain();
-    dly.delayTime.value = 0.48;
-    dlFb.gain.value = 0.28;
-    dly.connect(dlFb);
-    dlFb.connect(dly);
-    dlFb.connect(out);
-
-    // Pad — Am7 chord (A2 C3 E3 G3) through chorused detuned oscs + LP filter
-    const padFilt = ctx.createBiquadFilter();
-    padFilt.type = 'lowpass';
-    padFilt.frequency.value = 800;
-    padFilt.Q.value = 1.4;
-    padFilt.connect(out);
-    padFilt.connect(dly);
-
-    // Very slow LFO sweeps the filter cutoff for movement
-    const lfo  = ctx.createOscillator();
-    const lfoG = ctx.createGain();
-    lfo.frequency.value = 0.055;
-    lfoG.gain.value = 430;
-    lfo.connect(lfoG);
-    lfoG.connect(padFilt.frequency);
-    lfo.start();
-
-    [
-      [110, 0, 'sawtooth'], [110, 11, 'sawtooth'], [110, -11, 'sawtooth'],
-      [130.81, 0, 'triangle'], [164.81, 5, 'triangle'], [196, -4, 'triangle'],
-    ].forEach(([f, d, type]) => {
-      const osc = ctx.createOscillator();
-      const g   = ctx.createGain();
-      osc.type = type;
-      osc.frequency.value = f;
-      osc.detune.value = d;
-      g.gain.value = 0.028;
-      osc.connect(g);
-      g.connect(padFilt);
-      osc.start();
-    });
-
-    // Arp — A minor pentatonic, up and back down
-    const ARP  = [220, 261.63, 293.66, 329.63, 392, 440, 392, 329.63, 293.66, 261.63];
-    const STEP = 0.43;
-    const ALEN = ARP.length * STEP;
-
-    function scheduleArp(t0) {
-      ARP.forEach((freq, i) => {
-        const t   = t0 + i * STEP;
-        const osc = ctx.createOscillator();
-        const g   = ctx.createGain();
-        osc.type = 'triangle';
-        osc.frequency.value = freq;
-        osc.connect(g);
-        g.connect(out);
-        g.connect(dly);
-        g.gain.setValueAtTime(0.001, t);
-        g.gain.linearRampToValueAtTime(0.048, t + 0.018);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + STEP * 0.65);
-        osc.start(t);
-        osc.stop(t + STEP * 0.72);
-      });
-      scene.time.delayedCall((ALEN - 0.06) * 1000, () => scheduleArp(t0 + ALEN));
-    }
-
-    // Sub-bass pulse on the beat (55 Hz sine, 120 bpm)
-    const BEAT = 1.0;
-    function scheduleBass(t) {
-      const osc = ctx.createOscillator();
-      const g   = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = 55;
-      osc.connect(g);
-      g.connect(out);
-      g.gain.setValueAtTime(0.28, t);
-      g.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
-      osc.start(t);
-      osc.stop(t + 0.55);
-      scene.time.delayedCall(BEAT * 1000, () => scheduleBass(t + BEAT));
-    }
-
-    // Short high-pitched digital tick — every half-beat, offset for syncopation
-    const TICK = 0.5;
-    function scheduleTick(t) {
-      const osc = ctx.createOscillator();
-      const g   = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.value = 1320;
-      osc.connect(g);
-      g.connect(out);
-      g.gain.setValueAtTime(0.028, t);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.02);
-      osc.start(t);
-      osc.stop(t + 0.025);
-      scene.time.delayedCall(TICK * 1000, () => scheduleTick(t + TICK));
-    }
-
-    const t0 = ctx.currentTime + 0.3;
-    scheduleArp(t0);
-    scheduleBass(t0);
-    scheduleTick(t0 + 0.25);
-  } catch (_) {}
-}
-
-function playSound(scene, type) {
-  try {
-    const ctx = scene.sound && scene.sound.context ? scene.sound.context : new AudioContext();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-
-    const now = ctx.currentTime;
-    if (type === 'brick') {
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(880, now);
-      osc.frequency.exponentialRampToValueAtTime(440, now + 0.08);
-      gain.gain.setValueAtTime(0.18, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
-      osc.start(now);
-      osc.stop(now + 0.1);
-    } else if (type === 'penalty') {
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(300, now);
-      osc.frequency.exponentialRampToValueAtTime(80, now + 0.35);
-      gain.gain.setValueAtTime(0.28, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
-      osc.start(now);
-      osc.stop(now + 0.38);
-    } else if (type === 'click') {
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(1200, now);
-      osc.frequency.exponentialRampToValueAtTime(600, now + 0.04);
-      gain.gain.setValueAtTime(0.08, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
-      osc.start(now);
-      osc.stop(now + 0.05);
-    } else if (type === 'dash') {
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(180, now);
-      osc.frequency.exponentialRampToValueAtTime(900, now + 0.12);
-      gain.gain.setValueAtTime(0.22, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
-      osc.start(now);
-      osc.stop(now + 0.18);
-    } else if (type === 'select') {
-      osc.type = 'square';
-      osc.frequency.setValueAtTime(700, now);
-      osc.frequency.exponentialRampToValueAtTime(1400, now + 0.08);
-      gain.gain.setValueAtTime(0.12, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
-      osc.start(now);
-      osc.stop(now + 0.1);
-    }
-  } catch (_) {}
-}
-
-function spawnBrickBurst(scene, x, y, color) {
-  for (let index = 0; index < 6; index += 1) {
-    const particle = scene.add.rectangle(x, y, 4, 4, color, 1);
-    const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
-    const distance = Phaser.Math.Between(16, 42);
-
-    scene.tweens.add({
-      targets: particle,
-      x: x + Math.cos(angle) * distance,
-      y: y + Math.sin(angle) * distance,
-      alpha: 0,
-      angle: Phaser.Math.Between(-90, 90),
-      duration: Phaser.Math.Between(180, 320),
-      onComplete: () => particle.destroy(),
-    });
-  }
-}
-
-function refreshHud(scene) {
-  scene.hud.p1Score.setText(`P1 ${String(scene.state.scores.p1).padStart(2, '0')}`);
-  scene.hud.p2Score.setText(`P2 ${String(scene.state.scores.p2).padStart(2, '0')}`);
-  scene.hud.remaining.setText(`BRICKS ${String(scene.state.remainingBricks).padStart(3, '0')}`);
-}
-
-function animatePenaltyCounter(scene, playerKey) {
-  const text =
-    playerKey === 'p1' ? scene.hud.p1Score : scene.hud.p2Score;
-  const baseColor =
-    playerKey === 'p1'
-      ? scene.hud.scoreColors.p1
-      : scene.hud.scoreColors.p2;
-
-  scene.tweens.killTweensOf(text);
-  text.setColor(scene.hud.scoreColors.penalty);
-  text.setScale(1);
-  text.setAngle(0);
-
-  scene.tweens.add({
-    targets: text,
-    scaleX: 1.12,
-    scaleY: 1.12,
-    angle: playerKey === 'p1' ? -6 : 6,
-    duration: 90,
-    yoyo: true,
-    repeat: 1,
-    onComplete: () => {
-      text.setColor(baseColor);
-      text.setScale(1);
-      text.setAngle(0);
-    },
-  });
-}
-
-function maybeFinishMatch(scene) {
-  const { p1, p2 } = scene.state.scores;
-  const remaining = scene.state.remainingBricks;
-  const leaderScore = Math.max(p1, p2);
-  const trailingScore = Math.min(p1, p2);
-
-  if (remaining === 0 || leaderScore >= trailingScore + remaining) {
-    finishMatch(scene);
-  }
-}
-
-function finishMatch(scene) {
-  if (scene.state.phase !== 'playing') {
-    return;
-  }
-
-  scene.state.phase = 'gameover';
-  scene.physics.pause();
-  scene.hud.status.setText('');
-
-  const p1 = scene.state.scores.p1;
-  const p2 = scene.state.scores.p2;
-  const isTie = p1 === p2;
-
-  scene.state.winner = isTie ? 'draw' : p1 > p2 ? 'p1' : 'p2';
-  scene.state.winnerLabel =
-    scene.state.winner === 'p1'
-      ? 'PLAYER 1'
-      : scene.state.winner === 'p2'
-        ? 'PLAYER 2'
-        : 'DRAW';
-
-  scene.endGame.container.setVisible(true);
-  scene.endGame.summary.setText(
-    isTie
-      ? `${p1}  :  ${p2}`
-      : `${scene.state.winnerLabel}  ${Math.max(p1, p2)}  :  ${Math.min(p1, p2)}`,
-  );
-  scene.endGame.nameLabel.setText(
-    isTie ? 'DRAW TAG' : 'INITIALS',
-  );
-  scene.endGame.saveStatus.setText(scene.state.saveStatus);
-
-  scene.state.nameEntry.row = 0;
-  scene.state.nameEntry.col = 0;
-  scene.state.nameEntry.moveCooldownUntil = 0;
-  scene.state.nameEntry.confirmCooldownUntil = 0;
-  scene.state.nameEntry.lastMoveVector = { x: 0, y: 0 };
-  refreshNameEntry(scene);
-  updateLetterGridHighlight(scene);
-}
-
-function handleNameEntry(scene, time) {
-  const axisX = getHorizontalMenuAxis(scene.controls);
-  const axisY = getVerticalMenuAxis(scene.controls);
-  const entry = scene.state.nameEntry;
-
-  if (
-    time >= entry.moveCooldownUntil &&
-    (axisX !== 0 || axisY !== 0) &&
-    (entry.lastMoveVector.x !== axisX || entry.lastMoveVector.y !== axisY)
-  ) {
-    moveLetterSelection(scene, axisX, axisY);
-    entry.moveCooldownUntil = time + 160;
-    playSound(scene, 'click');
-  }
-
-  if (axisX === 0 && axisY === 0) {
-    entry.lastMoveVector = { x: 0, y: 0 };
-  } else {
-    entry.lastMoveVector = { x: axisX, y: axisY };
-  }
-
-  if (
-    time >= entry.confirmCooldownUntil &&
-    consumeAnyPressedControl(scene, ['P1_1', 'P2_1', 'P1_2', 'P2_2', 'START1', 'START2'])
-  ) {
-    entry.confirmCooldownUntil = time + 180;
-    playSound(scene, 'select');
-    activateCurrentLetter(scene);
-  }
-}
-
-function getHorizontalMenuAxis(controls) {
-  let axis = 0;
-  if (controls.held.P1_L || controls.held.P2_L) {
-    axis -= 1;
-  }
-  if (controls.held.P1_R || controls.held.P2_R) {
-    axis += 1;
-  }
-  return Phaser.Math.Clamp(axis, -1, 1);
-}
-
-function getVerticalMenuAxis(controls) {
-  let axis = 0;
-  if (controls.held.P1_U || controls.held.P2_U) {
-    axis -= 1;
-  }
-  if (controls.held.P1_D || controls.held.P2_D) {
-    axis += 1;
-  }
-  return Phaser.Math.Clamp(axis, -1, 1);
-}
-
-function normalizeIncomingKey(key) {
-  if (typeof key !== 'string' || key.length === 0) {
-    return '';
-  }
-
-  if (key === ' ') {
-    return 'space';
-  }
-
-  return key.toLowerCase();
-}
-
-function isControlHeld(scene, controlCode) {
-  return scene.controls.held[controlCode] === true;
-}
-
-function consumeAnyPressedControl(scene, controlCodes) {
-  for (const controlCode of controlCodes) {
-    if (scene.controls.pressed[controlCode]) {
-      scene.controls.pressed[controlCode] = false;
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function moveLetterSelection(scene, axisX, axisY) {
-  const entry = scene.state.nameEntry;
-
-  if (axisY !== 0) {
-    entry.row = Phaser.Math.Wrap(entry.row + axisY, 0, LETTER_GRID.length);
-    entry.col = Math.min(entry.col, LETTER_GRID[entry.row].length - 1);
-  }
-
-  if (axisX !== 0) {
-    entry.col = Phaser.Math.Wrap(entry.col + axisX, 0, LETTER_GRID[entry.row].length);
-  }
-
-  updateLetterGridHighlight(scene);
-}
-
-function updateLetterGridHighlight(scene) {
-  const entry = scene.state.nameEntry;
-  for (const item of scene.endGame.gridLabels) {
-    const active = item.row === entry.row && item.col === entry.col;
-    item.cell.setFillStyle(active ? COLORS.accent : COLORS.cell, active ? 1 : 0.95);
-    item.cell.setStrokeStyle(2, active ? COLORS.white : COLORS.frame, active ? 1 : 0.8);
-    item.label.setColor(active ? '#04110b' : '#f7ffd8');
-  }
-}
-
-function activateCurrentLetter(scene) {
-  const entry = scene.state.nameEntry;
-  const selectedValue = LETTER_GRID[entry.row][entry.col];
-
-  if (selectedValue === 'DEL') {
-    entry.letters.pop();
-    refreshNameEntry(scene);
-    return;
-  }
-
-  if (selectedValue === 'END') {
-    if (entry.letters.length === 0) {
-      scene.endGame.saveStatus.setText('Pick at least one character before saving.');
-      return;
-    }
-
-    submitHighScore(scene);
-    return;
-  }
-
-  if (entry.letters.length >= WINNING_NAME_LENGTH) {
-    entry.letters.shift();
-  }
-
-  entry.letters.push(selectedValue);
-  refreshNameEntry(scene);
-}
-
-function refreshNameEntry(scene) {
-  const letters = scene.state.nameEntry.letters.slice();
-  while (letters.length < WINNING_NAME_LENGTH) {
-    letters.push('_');
-  }
-  scene.endGame.nameValue.setText(letters.join(' '));
-}
-
-function submitHighScore(scene) {
-  if (scene.state.phase !== 'gameover') {
-    return;
-  }
-
-  const initials = scene.state.nameEntry.letters.join('').slice(0, WINNING_NAME_LENGTH) || '???';
-  const winningScore =
-    scene.state.winner === 'p1'
-      ? scene.state.scores.p1
-      : scene.state.winner === 'p2'
-        ? scene.state.scores.p2
-        : scene.state.scores.p1;
-
-  const entry = {
-    name: initials,
-    winner: scene.state.winnerLabel,
-    score: winningScore,
-    detail: `${scene.state.scores.p1}-${scene.state.scores.p2}`,
-    savedAt: new Date().toISOString().slice(0, 10),
-  };
-
-  scene.state.saveStatus = `Saved ${initials}! Press START to play again.`;
-  scene.endGame.saveStatus.setText(scene.state.saveStatus);
-  scene.state.phase = 'saved';
-
-  persistHighScore(entry)
-    .then((nextScores) => {
-      scene.state.highScores = nextScores;
-      refreshLeaderboard(scene);
-    })
-    .catch(() => {
-      scene.state.saveStatus = 'Could not save the score, but the game result stands.';
-      if (scene.state.phase === 'saved') {
-        scene.endGame.saveStatus.setText(scene.state.saveStatus);
-      }
-    });
-}
-
-function refreshLeaderboard(scene) {
-  const lines = scene.state.highScores.length
-    ? scene.state.highScores.map((entry, index) => {
-        const rank = String(index + 1).padStart(2, '0');
-        const score = String(entry.score).padStart(2, '0');
-        return `${rank} ${entry.name.padEnd(3, ' ')} ${score} ${entry.winner}`;
-      })
-    : ['NO SAVED SCORES YET'];
-
-  scene.endGame.leaderboard.setText(lines.join('\n'));
-}
-
-async function persistHighScore(entry) {
-  const existing = await loadHighScores();
-  const nextScores = existing
-    .concat(entry)
-    .sort((left, right) => {
-      if (right.score !== left.score) {
-        return right.score - left.score;
-      }
-      return left.savedAt < right.savedAt ? 1 : -1;
-    })
-    .slice(0, MAX_HIGH_SCORES);
-
-  await storageSet(STORAGE_KEY, nextScores);
-  return nextScores;
-}
-
-async function loadHighScores() {
-  const result = await storageGet(STORAGE_KEY);
-  if (!result.found || !Array.isArray(result.value)) {
-    return [];
-  }
-
-  return result.value.filter(isHighScoreEntry).slice(0, MAX_HIGH_SCORES);
-}
-
-function isHighScoreEntry(value) {
-  return (
-    value &&
-    typeof value === 'object' &&
-    typeof value.name === 'string' &&
-    typeof value.winner === 'string' &&
-    typeof value.score === 'number' &&
-    typeof value.detail === 'string' &&
-    typeof value.savedAt === 'string'
-  );
-}
-
-function getStorage() {
-  if (window.platanusArcadeStorage) {
-    return window.platanusArcadeStorage;
-  }
-
-  return {
-    async get(key) {
-      try {
-        const raw = window.localStorage.getItem(key);
-        return raw === null
-          ? { found: false, value: null }
-          : { found: true, value: JSON.parse(raw) };
-      } catch {
-        return { found: false, value: null };
-      }
-    },
-    async set(key, value) {
-      window.localStorage.setItem(key, JSON.stringify(value));
-    },
-};
-}
-
-async function storageGet(key) {
-  return getStorage().get(key);
-}
-
-async function storageSet(key, value) {
-  return getStorage().set(key, value);
-}
+})();
